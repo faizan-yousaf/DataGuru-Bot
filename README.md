@@ -87,7 +87,7 @@ We welcome contributions to improve **DataGuru**! Here's how you can contribute:
 ---
 
 ## 📄 License  
-This project is licensed under the **MIT License**. Feel free to use and improve it!
+This project is licensed under the **MIT License** ⚖. Feel free to use and improve it!
 
 ---
 
@@ -95,7 +95,7 @@ This project is licensed under the **MIT License**. Feel free to use and improve
 Developed with ❤️ by **Muhammad Faizan**  
 - **GitHub**: [faizan-yousaf](https://github.com/faizan-yousaf)  
 - **Twitter**: [faizany26996790](https://twitter.com/faizany26996790)  
-- **LinkedIn**: [/mrfaizanyousaf](https://linkedin.com/in/mrfaizanyousaf)  
+- **LinkedIn**: [mrfaizanyousaf](https://linkedin.com/in/mrfaizanyousaf)  
 
 ---
 
