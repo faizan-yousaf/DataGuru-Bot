@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.api import auth, chat, trends
 
 app = FastAPI(
     title="Data Guru API",
@@ -15,6 +16,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include routers
+app.include_router(auth.router)
+app.include_router(chat.router)
+app.include_router(trends.router)
 
 @app.get("/")
 async def root():
