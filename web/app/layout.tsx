@@ -8,6 +8,7 @@ const geistSans = localFont({
   variable: "--font-geist-sans",
   weight: "100 900",
 });
+
 const geistMono = localFont({
   src: "./fonts/GeistMonoVF.woff",
   variable: "--font-geist-mono",
@@ -21,25 +22,22 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: {
+  children: React.ReactNode
+}) {
   return (
     <ClerkProvider>
-      <html lang="en">
-        <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-          <header className="flex justify-between items-center p-4 bg-white shadow-sm">
-            <h1 className="text-xl font-bold">Data Guru</h1>
-            <div>
-              <SignedOut>
-                <a href="/sign-in" className="mr-4">Sign In</a>
-                <a href="/sign-up" className="px-4 py-2 bg-blue-500 text-white rounded">Sign Up</a>
-              </SignedOut>
-              <SignedIn>
-                <UserButton afterSignOutUrl="/" />
-              </SignedIn>
-            </div>
-          </header>
+      <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+        <body>
+          <nav className="flex justify-end items-center p-4 bg-white shadow-sm">
+            <SignedOut>
+              <a href="/sign-in" className="mr-4">Sign In</a>
+              <a href="/sign-up" className="px-4 py-2 bg-blue-500 text-white rounded">Sign Up</a>
+            </SignedOut>
+            <SignedIn>
+              <UserButton afterSignOutUrl="/" />
+            </SignedIn>
+          </nav>
           {children}
         </body>
       </html>
