@@ -1,12 +1,10 @@
 'use client';
 
-import { GoogleGenAI } from "@google/genai";
+// First install the package:
+// npm install @google/generative-ai
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { useState, useRef, useEffect } from 'react';
-import { GoogleOAuthProvider, useGoogleLogin } from '@react-oauth/google';
 import { motion, AnimatePresence } from 'framer-motion';
-import ReactMarkdown from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { dracula } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import { 
   Copy, 
   ThumbsUp, 
@@ -17,15 +15,23 @@ import {
   Link,
   Mic,
   Send,
-  Brain
+  Brain,
+  Upload,
+  MicOff
 } from 'lucide-react';
-import Image from 'next/image';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
+
+// Message type definition
+interface Message {
+  id: string;
+  content: string;
+  sender: 'user' | 'ai';
+  timestamp: Date;
+  attachments?: AttachmentProp[];
+  likes?: number;
+  dislikes?: number;
+  isLiked?: boolean;
+  isDisliked?: boolean;
+}
 
 interface AttachmentProp {
   type: 'image' | 'code' | 'voice' | 'document' | 'link';
@@ -35,132 +41,230 @@ interface AttachmentProp {
   mimeType?: string;
 }
 
-// Message type definition
-type Message = {
-  id: any;
-  content: string;
-  sender: 'user' | 'ai';
-  timestamp: Date;
-  attachments?: AttachmentProp[]
-  likes?: number;
-  dislikes?: number;
-  isLiked?: boolean;
-  isDisliked?: boolean;
-};
-
-export default function ChatPageWrapper() {
-  return (
-    <GoogleOAuthProvider clientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || ''}>
-      <ChatPage />
-    </GoogleOAuthProvider>
-  );
+// Button component props interface
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  children: React.ReactNode;
+  variant?: 'default' | 'ghost' | 'outline' | 'destructive';
+  size?: 'default' | 'sm' | 'icon';
+  className?: string;
 }
 
-function ChatPage() {
+// Input component props interface
+interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  className?: string;
+}
 
-  const ai = new GoogleGenAI({ apiKey: process.env.apikey });
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      content: "Hello! I'm Data Guru, your AI assistant for data science. How can I help you today?",
-      sender: 'ai',
-      timestamp: new Date(),
-      likes: 0,
-      dislikes: 0,
-      isLiked: false,
-      isDisliked: false,
-    },
-  ]);
+// Card component props interface
+interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
+  children: React.ReactNode;
+  className?: string;
+}
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.0-flash",
-    contents: "Explain how AI works in a few words",
-  });
-
-  const OnMessage = (message: Message) => {
-    setMessages((prevMessages) => [...prevMessages, message]);
+// Custom components
+const Button: React.FC<ButtonProps> = ({ 
+  children, 
+  variant = 'default', 
+  size = 'default', 
+  className = '', 
+  onClick, 
+  ...props 
+}) => {
+  const baseClasses = 'inline-flex items-center justify-center rounded-md font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none';
+  
+  const variantClasses = {
+    default: 'bg-black text-white hover:bg-gray-800',
+    ghost: 'hover:bg-gray-100 hover:text-gray-900',
+    outline: 'border border-gray-300 bg-white hover:bg-gray-50',
+    destructive: 'bg-red-600 text-white hover:bg-red-700'
   };
 
+  const sizeClasses = {
+    default: 'h-10 px-4 py-2',
+    sm: 'h-8 px-3 text-sm',
+    icon: 'h-10 w-10'
+  };
+
+  return (
+    <button
+      className={`${baseClasses} ${variantClasses[variant]} ${sizeClasses[size]} ${className}`}
+      onClick={onClick}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+};
+
+const Input: React.FC<InputProps> = ({ className = '', ...props }) => (
+  <input
+    className={`border rounded-lg px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-yellow-400 ${className}`}
+    {...props}
+  />
+);
+
+const Card: React.FC<CardProps> = ({ children, className = '', ...props }) => (
+  <div className={`rounded-lg border p-4 ${className}`} {...props}>
+    {children}
+  </div>
+);
+
+const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => (
+  <div className="prose max-w-none whitespace-pre-wrap">
+    {content}
+  </div>
+);
+
+// Chat component
+export default function ChatPage() {
+  // State declarations
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputMessage, setInputMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [webLink, setWebLink] = useState('');
+  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
+  const [showLinkInput, setShowLinkInput] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  
+  // Refs
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachmentMenuRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Initialize Gemini with safety check
+  const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || '');
+  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+  // Effect for scrolling to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Effect for handling clicks outside attachment menu
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (attachmentMenuRef.current && !attachmentMenuRef.current.contains(event.target as Node)) {
+        setShowAttachmentMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Add this function to validate API key
+  const isValidApiKey = () => {
+    return process.env.NEXT_PUBLIC_GEMINI_API_KEY && process.env.NEXT_PUBLIC_GEMINI_API_KEY.length > 0;
+  };
+
+  // Update the message handling
   const handleSendMessage = async () => {
-    if (inputMessage.trim() || selectedFile || webLink) {
-      setIsLoading(true);
-      const messageId = Date.now().toString();
-      const userMessage: Message = {
-        id: messageId,
-        content: inputMessage.trim(),
-        sender: 'user',
-        timestamp: new Date(),
-        attachments: [],
-      };
+    if (!inputMessage.trim() && !selectedFile && !webLink) return;
 
-      // Create FormData for file upload
-      const formData = new FormData();
-      formData.append('message', inputMessage.trim());
+    setIsLoading(true);
+    const messageId = Date.now().toString();
+    const userMessage: Message = {
+      id: messageId,
+      content: inputMessage.trim() || 'Shared an attachment',
+      sender: 'user',
+      timestamp: new Date(),
+      attachments: [],
+    };
+
+    // Add attachments if any
+    if (selectedFile) {
+      const fileType = selectedFile.type.startsWith('image/') ? 'image' : 
+                    selectedFile.type.startsWith('audio/') ? 'voice' :
+                    'document';
+      userMessage.attachments?.push({
+        type: fileType,
+        url: URL.createObjectURL(selectedFile),
+        name: selectedFile.name,
+        mimeType: selectedFile.type
+      });
+    }
+
+    if (webLink) {
+      userMessage.attachments?.push({
+        type: 'link',
+        url: webLink,
+        preview: webLink,
+      });
+    }
+
+    // Add user message
+    setMessages(prev => [...prev, userMessage]);
+    
+    // Clear inputs
+    setInputMessage('');
+    setSelectedFile(null);
+    setWebLink('');
+    setShowAttachmentMenu(false);
+    setShowLinkInput(false);
+
+    try {
+      // Validate API key first
+      if (!isValidApiKey()) {
+        throw new Error('Invalid or missing API key');
+      }
+
+      // Generate response using Gemini with proper error handling
+      const result = await model.generateContent(userMessage.content);
+      if (!result) {
+        throw new Error('No response from Gemini API');
+      }
+
+      const response = await result.response;
+      if (!response) {
+        throw new Error('Empty response from Gemini API');
+      }
+
+      const text = await response.text();
+      if (!text) {
+        throw new Error('Empty text from Gemini API');
+      }
       
-      if (selectedFile) {
-        formData.append('file', selectedFile);
-        const fileType = selectedFile.type.startsWith('image/') ? 'image' : 
-                        selectedFile.type.startsWith('audio/') ? 'voice' :
-                        'document';
-        userMessage.attachments?.push({
-          type: fileType,
-          url: URL.createObjectURL(selectedFile),
-          name: selectedFile.name,
-          mimeType: selectedFile.type
-        });
-      }
-
-      if (webLink) {
-        formData.append('web_link', webLink);
-        userMessage.attachments?.push({
-          type: 'link',
-          url: webLink,
-          preview: webLink,
-        });
-      }
-
-      OnMessage(userMessage);
-      setInputMessage('');
-      setSelectedFile(null);
-      setWebLink('');
-      setShowAttachmentMenu(false);
-
-      try {
-        const response = await fetch('http://localhost:8000/chat/message', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to get AI response');
-        }
-
-        const data = await response.json();
-        const aiResponse: Message = {
-          id: (Date.now() + 1).toString(),
-          content: data.response,
-          sender: 'ai',
-          timestamp: new Date(),
-          likes: 0,
-          dislikes: 0,
-          isLiked: false,
-          isDisliked: false,
-        };
-        OnMessage(aiResponse);
-      } catch (error) {
-        console.error('Error sending message:', error);
-      } finally {
-        setIsLoading(false);
-      }
+      const aiResponse: Message = {
+        id: (Date.now() + 1).toString(),
+        content: text,
+        sender: 'ai',
+        timestamp: new Date(),
+        likes: 0,
+        dislikes: 0,
+        isLiked: false,
+        isDisliked: false,
+      };
+      
+      setMessages(prev => [...prev, aiResponse]);
+    } catch (error) {
+      console.error('Error details:', error);
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: `Error: ${error instanceof Error ? error.message : 'An unexpected error occurred'}. Please try again.`,
+        sender: 'ai',
+        timestamp: new Date(),
+        likes: 0,
+        dislikes: 0,
+        isLiked: false,
+        isDisliked: false,
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  const handleCopy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      // You could add a toast notification here
+    } catch (error) {
+      console.error('Failed to copy text:', error);
     }
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-  };
-
   const handleLike = (messageId: string) => {
-    setMessages(messages.map(msg => {
+    setMessages(prev => prev.map(msg => {
       if (msg.id === messageId) {
         return {
           ...msg,
@@ -175,7 +279,7 @@ function ChatPage() {
   };
 
   const handleDislike = (messageId: string) => {
-    setMessages(messages.map(msg => {
+    setMessages(prev => prev.map(msg => {
       if (msg.id === messageId) {
         return {
           ...msg,
@@ -193,35 +297,43 @@ function ChatPage() {
     const message = messages.find(msg => msg.id === messageId);
     if (message) {
       try {
-        await navigator.share({
-          title: 'Shared from Data Guru',
-          text: message.content,
-        });
+        if (navigator.share) {
+          await navigator.share({
+            title: 'Shared from Data Guru',
+            text: message.content,
+          });
+        } else {
+          // Fallback to clipboard
+          await handleCopy(message.content);
+        }
       } catch (error) {
         console.error('Error sharing message:', error);
       }
     }
   };
 
+  // Fix for handleRegenerate function
   const handleRegenerate = async (messageId: string) => {
     const message = messages.find(msg => msg.id === messageId);
     if (message && message.sender === 'ai') {
       setIsLoading(true);
       try {
-        const response = await fetch('http://localhost:8000/api/chat/message', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: message.content }),
-        });
+        const userMessageIndex = messages.findIndex(msg => msg.id === messageId) - 1;
+        const userMessage = messages[userMessageIndex];
         
-        if (!response.ok) throw new Error('Failed to regenerate response');
+        if (!userMessage) {
+          throw new Error('Could not find the original user message');
+        }
         
-        const data = await response.json();
-        setMessages(messages.map(msg => {
+        const result = await model.generateContent(userMessage.content);
+        const response = await result.response;
+        const text = await response.text();
+        
+        setMessages(prev => prev.map(msg => {
           if (msg.id === messageId) {
             return {
               ...msg,
-              content: data.response,
+              content: text,
               timestamp: new Date(),
             };
           }
@@ -234,38 +346,25 @@ function ChatPage() {
       }
     }
   };
-  const [inputMessage, setInputMessage] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
-  const [webLink, setWebLink] = useState('');
-  const [showLinkInput, setShowLinkInput] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  
-  // Voice recording functionality
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
-  const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
-  
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const attachmentMenuRef = useRef<HTMLDivElement>(null);
 
-  // Initialize voice recording
+  // Voice recording functions
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       setMediaRecorder(recorder);
       
+      const chunks: Blob[] = [];
       recorder.ondataavailable = (e) => {
-        setAudioChunks((chunks) => [...chunks, e.data]);
+        if (e.data.size > 0) {
+          chunks.push(e.data);
+        }
       };
       
       recorder.onstop = () => {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+        const audioBlob = new Blob(chunks, { type: 'audio/wav' });
         setSelectedFile(new File([audioBlob], 'voice-message.wav', { type: 'audio/wav' }));
-        setAudioChunks([]);
+        stream.getTracks().forEach(track => track.stop());
       };
       
       recorder.start();
@@ -279,64 +378,24 @@ function ChatPage() {
     if (mediaRecorder && isRecording) {
       mediaRecorder.stop();
       setIsRecording(false);
-      // Stop all audio tracks
-      mediaRecorder.stream.getTracks().forEach(track => track.stop());
     }
   };
 
-  // Scroll to bottom of messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  // Close menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (attachmentMenuRef.current && !attachmentMenuRef.current.contains(event.target as Node)) {
-        setShowAttachmentMenu(false);
-        setShowLinkInput(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-
-
-  // Handle file selection
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0];
       setSelectedFile(file);
-      // Reset progress when a new file is selected
-      setUploadProgress(0);
+      setShowAttachmentMenu(false);
     }
   };
 
-  // Handle web link submission
   const handleLinkSubmit = () => {
     if (webLink.trim()) {
-      const newMessage: Message = {
-        id: Date.now().toString(),
-        content: 'Shared a link',
-        sender: 'user',
-        timestamp: new Date(),
-        attachments: [{
-          type: 'link',
-          url: webLink,
-          preview: webLink
-        }]
-      };
-      const updatedMessages = [...messages, newMessage] as any;
-      OnMessage(updatedMessages);
-      setWebLink('');
       setShowLinkInput(false);
       setShowAttachmentMenu(false);
     }
   };
 
-  // Handle paste from clipboard
   const handlePaste = async () => {
     try {
       const text = await navigator.clipboard.readText();
@@ -346,110 +405,60 @@ function ChatPage() {
     }
   };
 
-  // Render attachment menu
-  const renderAttachmentMenu = () => (
-    <motion.div
-      ref={attachmentMenuRef}
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 10 }}
-      className="absolute bottom-full mb-3 bg-white rounded-lg shadow-xl p-3 min-w-[220px] border border-gray-200 z-10"
-    >
-      {showLinkInput ? (
-        <div className="flex flex-col gap-3">
-          <input
-            type="text"
-            value={webLink}
-            onChange={(e) => setWebLink(e.target.value)}
-            placeholder="Enter web link"
-            className="border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-          <div className="flex gap-2">
-            <button
-              onClick={handlePaste}
-              className="flex-1 bg-gray-100 hover:bg-gray-200 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-200"
-            >
-              Paste
-            </button>
-            <button
-              onClick={handleLinkSubmit}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md px-3 py-2 text-sm font-medium transition-colors duration-200"
-            >
-              Add
-            </button>
+  const renderAttachment = (attachment: AttachmentProp) => {
+    switch (attachment.type) {
+      case 'image':
+        return (
+          <div className="mt-2">
+            <img 
+              src={attachment.url} 
+              alt={attachment.name || 'Uploaded image'} 
+              className="max-w-xs rounded-lg border"
+            />
           </div>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-1">
-          <button
-            onClick={() => login()}
-            className="text-left px-4 py-3 hover:bg-blue-50 rounded-md text-blue-700 font-medium transition-colors duration-200 flex items-center gap-2"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 0c-6.627 0-12 5.373-12 12s5.373 12 12 12 12-5.373 12-12-5.373-12-12-12zm-2.917 16.083c-2.258 0-4.083-1.825-4.083-4.083s1.825-4.083 4.083-4.083c1.103 0 2.024.402 2.735 1.067l-1.107 1.068c-.304-.292-.834-.63-1.628-.63-1.394 0-2.531 1.155-2.531 2.579 0 1.424 1.138 2.579 2.531 2.579 1.616 0 2.224-1.162 2.316-1.762h-2.316v-1.4h3.855c.036.204.064.408.064.677.001 2.332-1.563 3.988-3.919 3.988zm9.917-3.5h-1.75v1.75h-1.167v-1.75h-1.75v-1.166h1.75v-1.75h1.167v1.75h1.75v1.166z"/>
-            </svg>
-            Google Drive
-          </button>
-          <button
-            onClick={() => setShowLinkInput(true)}
-            className="text-left px-4 py-3 hover:bg-blue-50 rounded-md text-blue-700 font-medium transition-colors duration-200 flex items-center gap-2"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-            </svg>
-            Web Link
-          </button>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="text-left px-4 py-3 hover:bg-blue-50 rounded-md text-blue-700 font-medium transition-colors duration-200 flex items-center gap-2"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="17 8 12 3 7 8"></polyline>
-              <line x1="12" y1="3" x2="12" y2="15"></line>
-            </svg>
-            Upload File
-          </button>
-        </div>
-      )}
-    </motion.div>
-  );
+        );
+      case 'link':
+        return (
+          <div className="mt-2 p-2 bg-blue-50 rounded-lg border border-blue-200">
+            <a 
+              href={attachment.url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:underline text-sm"
+            >
+              {attachment.preview || attachment.url}
+            </a>
+          </div>
+        );
+      case 'document':
+      case 'voice':
+        return (
+          <div className="mt-2 p-2 bg-gray-50 rounded-lg border">
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <Paperclip className="h-4 w-4" />
+              <span>{attachment.name}</span>
+            </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
 
-  // Move Google Drive integration before return statement
-  const login = useGoogleLogin({
-    onSuccess: async (response) => {
-      try {
-        const result = await fetch('https://www.googleapis.com/drive/v3/files', {
-          headers: {
-            Authorization: `Bearer ${response.access_token}`,
-          },
-        });
-        const data = await result.json();
-        // Handle the Google Drive files data
-        console.log(data);
-      } catch (error) {
-        console.error('Error accessing Google Drive:', error);
-      }
-    },
-  });
-  
   return (
     <div className="flex flex-col h-screen bg-white">
       {/* Header */}
       <header className="bg-black text-white py-4 px-6 border-b border-yellow-400">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-yellow-400 rounded-lg flex items-center justify-center">
-              <Brain className="w-5 h-5 text-black" />
-            </div>
-            <h1 className="text-xl font-bold">Data Guru Chat</h1>
+        <div className="flex items-center space-x-3">
+          <div className="w-8 h-8 bg-yellow-400 rounded-lg flex items-center justify-center">
+            <Brain className="w-5 h-5 text-black" />
           </div>
+          <h1 className="text-xl font-bold">Data Guru Chat</h1>
         </div>
       </header>
       
       {/* Messages Container */}
-      <ScrollArea className="flex-1 p-6 bg-gray-50">
+      <div className="flex-1 p-6 bg-gray-50 overflow-y-auto">
         <div className="space-y-4">
           <AnimatePresence>
             {messages.map((message) => (
@@ -465,169 +474,227 @@ function ChatPage() {
                   ? 'bg-black text-white border-yellow-400' 
                   : 'bg-white text-gray-800 border-gray-200'}`}
                 >
-                  <div className="prose max-w-none break-words">
-                    <ReactMarkdown
-                      components={{
-                        code({node, inline, className, children, ...props}:any) {
-                          const match = /language-(\w+)/.exec(className || '');
-                          const language = match ? match[1] : '';
-                          return !inline ? (
-                            <div className="relative group my-4">
-                              <button
-                                onClick={() => handleCopy(String(children))}
-                                className="absolute top-2 right-2 p-2 bg-gray-800 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                                title="Copy code"
-                              >
-                              </button>
-                              <SyntaxHighlighter
-                                style={dracula}
-                                language={language}
-                                PreTag="div"
-                                customStyle={{
-                                  margin: 0,
-                                  borderRadius: '0.5rem',
-                                  padding: '1rem',
-                                  fontSize: '0.875rem',
-                                  lineHeight: '1.5'
-                                }}
-                                {...props}
-                              >
-                                {String(children).replace(/\n$/, '')}
-                              </SyntaxHighlighter>
-                            </div>
-                          ) : (
-                            <code className={`${className || ''} bg-gray-100 text-gray-800 rounded px-1.5 py-0.5 text-sm font-mono`} {...props}>
-                              {children}
-                            </code>
-                          );
-                        },
-                        p: ({ children }) => <p className="mb-4 last:mb-0 leading-relaxed">{children}</p>,
-                        ul: ({ children }) => <ul className="list-disc list-inside mb-4 last:mb-0 space-y-2">{children}</ul>,
-                        ol: ({ children }) => <ol className="list-decimal list-inside mb-4 last:mb-0 space-y-2">{children}</ol>,
-                        li: ({ children }) => <li className="mb-1 last:mb-0 pl-1">{children}</li>,
-                        a: ({ href, children }) => (
-                          <a 
-                            href={href} 
-                            target="_blank" 
-                            rel="noopener noreferrer" 
-                            className="text-blue-600 hover:underline hover:text-blue-800 transition-colors duration-200"
-                          >
-                            {children}
-                          </a>
-                        ),
-                      }}
-                    >
-                      {message.content}
-                    </ReactMarkdown>
-                  </div>
+                  <MarkdownRenderer content={message.content} />
+                  
+                  {/* Render attachments */}
+                  {message.attachments?.map((attachment, index) => (
+                    <div key={index}>
+                      {renderAttachment(attachment)}
+                    </div>
+                  ))}
                   
                   {/* Message actions */}
-                  <div className="flex items-center justify-end mt-2 space-x-2">
-                  <TooltipProvider>
-                    <Tooltip>
-                      <Button variant="ghost" size="icon" onClick={() => handleCopy(message.content)}>
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                    </Tooltip>
-                    </TooltipProvider>
-                    <TooltipProvider>
-                    <Tooltip>
-                    
+                  {message.sender === 'ai' && (
+                    <div className="flex items-center justify-end mt-3 space-x-2 opacity-70 hover:opacity-100 transition-opacity">
                       <Button 
                         variant="ghost" 
-                        size="icon" 
+                        size="sm"
+                        onClick={() => handleCopy(message.content)}
+                        className="h-8 w-8 p-0"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
                         onClick={() => handleLike(message.id)}
-                        className={message.isLiked ? 'text-yellow-400' : ''}
+                        className={`h-8 w-8 p-0 ${message.isLiked ? 'text-yellow-400' : ''}`}
                       >
-                        <ThumbsUp className="h-4 w-4" />
+                        <ThumbsUp className="h-3 w-3" />
                       </Button>
-                    </Tooltip>
-                    </TooltipProvider>
-                    <TooltipProvider>
-                    <Tooltip>
-
                       <Button 
                         variant="ghost" 
-                        size="icon" 
+                        size="sm"
                         onClick={() => handleDislike(message.id)}
-                        className={message.isDisliked ? 'text-yellow-400' : ''}
+                        className={`h-8 w-8 p-0 ${message.isDisliked ? 'text-red-400' : ''}`}
                       >
-                        <ThumbsDown className="h-4 w-4" />
+                        <ThumbsDown className="h-3 w-3" />
                       </Button>
-                    </Tooltip>
-                    </TooltipProvider>
-                    <TooltipProvider>
-                    <Tooltip>
-                      <Button variant="ghost" size="icon" onClick={() => handleShare(message.id)}>
-                        <Share2 className="h-4 w-4" />
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={() => handleShare(message.id)}
+                        className="h-8 w-8 p-0"
+                      >
+                        <Share2 className="h-3 w-3" />
                       </Button>
-                    </Tooltip>
-                    </TooltipProvider>
-                    {message.sender === 'ai' && (
-                      <TooltipProvider>
-                      <Tooltip>
-                        <Button variant="ghost" size="icon" onClick={() => handleRegenerate(message.id)}>
-                          <RefreshCw className="h-4 w-4" />
-                        </Button>
-                      </Tooltip>
-                      </TooltipProvider>
-                    )}
-                  </div>
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={() => handleRegenerate(message.id)}
+                        className="h-8 w-8 p-0"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  )}
                 </Card>
               </motion.div>
             ))}
           </AnimatePresence>
+          
+          {isLoading && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex justify-start"
+            >
+              <Card className="max-w-[80%] p-4 bg-white text-gray-800 border-gray-200">
+                <div className="flex items-center space-x-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                  <span>Thinking...</span>
+                </div>
+              </Card>
+            </motion.div>
+          )}
+          
           <div ref={messagesEndRef} />
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Input Area */}
       <div className="border-t border-gray-200 p-4 bg-white">
-        <div className="relative flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon">
-                <Paperclip className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
-                <Paperclip className="mr-2 h-4 w-4" />
-                Upload File
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowLinkInput(true)}>
-                <Link className="mr-2 h-4 w-4" />
-                Add Link
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        {/* File/Link preview */}
+        {(selectedFile || webLink) && (
+          <div className="mb-3 p-2 bg-gray-50 rounded-lg border flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              {selectedFile && (
+                <>
+                  <Paperclip className="h-4 w-4" />
+                  <span>{selectedFile.name}</span>
+                </>
+              )}
+              {webLink && (
+                <>
+                  <Link className="h-4 w-4" />
+                  <span>{webLink}</span>
+                </>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSelectedFile(null);
+                setWebLink('');
+              }}
+              className="h-6 w-6 p-0"
+            >
+              ×
+            </Button>
+          </div>
+        )}
+
+        {/* Link input */}
+        {showLinkInput && (
+          <div className="mb-3 flex gap-2">
+            <Input
+              type="text"
+              value={webLink}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWebLink(e.target.value)}
+              placeholder="Enter web link..."
+              className="flex-1"
+            />
+            <Button onClick={handlePaste} variant="outline" size="sm">
+              Paste
+            </Button>
+            <Button onClick={handleLinkSubmit} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white">
+              Add
+            </Button>
+            <Button 
+              onClick={() => setShowLinkInput(false)} 
+              variant="outline" 
+              size="sm"
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
+
+        {/* Main input */}
+        <div className="flex items-center gap-2">
+          {/* Attachment menu */}
+          <div className="relative" ref={attachmentMenuRef}>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
+              className="h-10 w-10"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+            
+            {showAttachmentMenu && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="absolute bottom-full mb-2 bg-white rounded-lg shadow-xl border border-gray-200 min-w-[160px] z-10"
+              >
+                <div className="p-1">
+                  <button
+                    onClick={() => {
+                      fileInputRef.current?.click();
+                      setShowAttachmentMenu(false);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-100 rounded-md text-sm flex items-center gap-2"
+                  >
+                    <Upload className="h-4 w-4" />
+                    Upload File
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowLinkInput(true);
+                      setShowAttachmentMenu(false);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-100 rounded-md text-sm flex items-center gap-2"
+                  >
+                    <Link className="h-4 w-4" />
+                    Add Link
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </div>
           
           <Input
             type="text"
             value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInputMessage(e.target.value)}
             placeholder="Type your message..."
             className="flex-1"
-            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+            onKeyPress={(e: React.KeyboardEvent<HTMLInputElement>) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
+            disabled={isLoading}
           />
           
           <Button 
             onClick={isRecording ? stopRecording : startRecording}
             variant={isRecording ? 'destructive' : 'outline'}
             size="icon"
+            className="h-10 w-10"
           >
-            <Mic className="h-4 w-4" />
+            {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
           </Button>
           
           <Button 
             onClick={handleSendMessage}
-            disabled={isLoading}
-            className="bg-yellow-400 hover:bg-yellow-500 text-black"
+            disabled={isLoading || (!inputMessage.trim() && !selectedFile && !webLink)}
+            className="bg-yellow-400 hover:bg-yellow-500 text-black h-10 w-10"
+            size="icon"
           >
-            {isLoading ? 'Sending...' : <Send className="h-4 w-4" />}
+            <Send className="h-4 w-4" />
           </Button>
         </div>
       </div>
+      
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        onChange={handleFileSelect}
+        className="hidden"
+        accept="*/*"
+      />
     </div>
   );
 }
