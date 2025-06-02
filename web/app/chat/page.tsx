@@ -1,5 +1,6 @@
 'use client';
 
+import { GoogleGenAI } from "@google/genai";
 import { useState, useRef, useEffect } from 'react';
 import { GoogleOAuthProvider, useGoogleLogin } from '@react-oauth/google';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -56,6 +57,8 @@ export default function ChatPageWrapper() {
 }
 
 function ChatPage() {
+
+  const ai = new GoogleGenAI({ apiKey: process.env.apikey });
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
@@ -68,6 +71,11 @@ function ChatPage() {
       isDisliked: false,
     },
   ]);
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.0-flash",
+    contents: "Explain how AI works in a few words",
+  });
 
   const OnMessage = (message: Message) => {
     setMessages((prevMessages) => [...prevMessages, message]);
