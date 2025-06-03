@@ -7,6 +7,7 @@ import {
   ThumbsUp, ThumbsDown, Share2, RefreshCw, Loader2, 
   Brain, Sparkles, Image as ImageIcon, FileText
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -549,7 +550,7 @@ const MessageBubble: React.FC<{
         }
       `}>
         <div className="whitespace-pre-wrap leading-relaxed text-sm">
-          {message.content}
+          <ReactMarkdown>{message.content}</ReactMarkdown>
         </div>
         
         {message.attachments?.map((attachment) => (
