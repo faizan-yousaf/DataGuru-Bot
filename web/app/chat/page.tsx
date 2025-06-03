@@ -8,6 +8,8 @@ import {
   Brain, Sparkles, Image as ImageIcon, FileText
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { SYSTEM_PROMPT } from '@/data/prompt';
+
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -103,7 +105,33 @@ const useGeminiChat = () => {
     }));
 
     try {
-      const result = await model.generateContent(content);
+      // Create conversation history with system prompt
+      const conversationHistory = [
+        { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
+        { role: 'model', parts: [{ text: 'Understood! I am DataGuru, your specialized Data Science AI assistant. I will validate the scope of all queries and respond only to data science, ML, AI, and related technical topics. I\'m ready to help with a friendly mentor approach unless you specify a different tone. What would you like to work on?' }] }
+      ];
+
+      // Add previous messages to history (last 10 to avoid token limits)
+      const recentMessages = state.messages.slice(-10);
+      recentMessages.forEach(msg => {
+        conversationHistory.push({
+          role: msg.role === 'user' ? 'user' : 'model',
+          parts: [{ text: msg.content }]
+        });
+      });
+
+      // Add current message
+      conversationHistory.push({
+        role: 'user',
+        parts: [{ text: content }]
+      });
+
+      // Start chat with history
+      const chat = model.startChat({
+        history: conversationHistory.slice(0, -1), // All except the last message
+      });
+
+      const result = await chat.sendMessage(content);
       const response = await result.response;
       const text = response.text();
 
@@ -136,7 +164,7 @@ const useGeminiChat = () => {
         error: error instanceof Error ? error.message : 'Unknown error occurred'
       }));
     }
-  }, [model]);
+  }, [model, state.messages]); // Add state.messages to dependencies
 
   const updateReaction = useCallback((messageId: string, type: 'like' | 'dislike') => {
     setState(prev => ({
@@ -189,7 +217,26 @@ const useGeminiChat = () => {
     try {
       if (!model) throw new Error('API key not configured');
       
-      const result = await model.generateContent(previousMessage.content);
+      // Create conversation history for regeneration
+      const conversationHistory = [
+        { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
+        { role: 'model', parts: [{ text: 'Understood! I am DataGuru, your specialized Data Science AI assistant. I will validate the scope of all queries and respond only to data science, ML, AI, and related technical topics. I\'m ready to help with a friendly mentor approach unless you specify a different tone. What would you like to work on?' }] }
+      ];
+
+      // Add messages up to the one being regenerated
+      const messagesUpToRegenerate = state.messages.slice(0, messageIndex);
+      messagesUpToRegenerate.forEach(msg => {
+        conversationHistory.push({
+          role: msg.role === 'user' ? 'user' : 'model',
+          parts: [{ text: msg.content }]
+        });
+      });
+
+      const chat = model.startChat({
+        history: conversationHistory,
+      });
+
+      const result = await chat.sendMessage(previousMessage.content);
       const response = await result.response;
       const text = response.text();
 
@@ -574,10 +621,10 @@ const ChatHeader: React.FC = () => (
         <Brain className="w-5 h-5 text-white" />
       </div>
       <div>
-        <h1 className="text-xl font-bold text-gray-900">AI Assistant</h1>
+        <h1 className="text-xl font-bold text-gray-900">DataGuru</h1>
         <p className="text-sm text-gray-500 flex items-center gap-1">
           <Sparkles className="w-3 h-3" />
-          Powered by Gemini
+          Your Data Science AI Assistant
         </p>
       </div>
     </div>
