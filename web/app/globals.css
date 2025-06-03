@@ -76,3 +76,83 @@
     @apply bg-background text-foreground;
   }
 }
+
+
+
+
+/* Python Syntax Highlighting */
+.code-python .token-keyword { color: #c586c0; }
+.code-python .token-string { color: #ce9178; }
+.code-python .token-comment { color: #6a9955; }
+.code-python .token-number { color: #b5cea8; }
+.code-python .token-function { color: #dcdcaa; }
+
+/* JavaScript Syntax Highlighting */
+.code-javascript .token-keyword { color: #569cd6; }
+.code-javascript .token-string { color: #ce9178; }
+.code-javascript .token-comment { color: #6a9955; }
+.code-javascript .token-number { color: #b5cea8; }
+.code-javascript .token-function { color: #dcdcaa; }
+
+/* SQL Syntax Highlighting */
+.code-sql .token-keyword { color: #569cd6; }
+.code-sql .token-string { color: #ce9178; }
+.code-sql .token-comment { color: #6a9955; }
+.code-sql .token-number { color: #b5cea8; }
+
+/* R Syntax Highlighting */
+.code-r .token-keyword { color: #c586c0; }
+.code-r .token-string { color: #ce9178; }
+.code-r .token-comment { color: #6a9955; }
+.code-r .token-number { color: #b5cea8; }
+
+/* General Code Styling */
+.code-text, .code-bash, .code-shell {
+  color: #d4d4d4;
+}
+
+/* Improve prose styling for markdown */
+.prose code {
+  background: transparent !important;
+  padding: 0 !important;
+  border: none !important;
+  font-weight: normal !important;
+}
+
+.prose pre {
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+}
+
+/* Custom scrollbar for code blocks */
+.bg-gray-900::-webkit-scrollbar {
+  height: 8px;
+}
+
+.bg-gray-900::-webkit-scrollbar-track {
+  background: #374151;
+  border-radius: 4px;
+}
+
+.bg-gray-900::-webkit-scrollbar-thumb {
+  background: #6b7280;
+  border-radius: 4px;
+}
+
+.bg-gray-900::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .code-block-container {
+    margin-left: -1rem;
+    margin-right: -1rem;
+  }
+  
+  .code-block-container .bg-gray-800 {
+    border-radius: 0;
+  }
+}
