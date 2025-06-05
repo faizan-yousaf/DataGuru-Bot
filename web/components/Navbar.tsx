@@ -1,7 +1,6 @@
 import { SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
-import { Brain, User } from 'lucide-react';
 import Link from 'next/link';
-import { Button } from './ui/button';
+import { Logo } from './Logo';
 
 export function Navbar() {
   return (
@@ -9,20 +8,20 @@ export function Navbar() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-xl flex items-center justify-center">
-              <Brain className="w-6 h-6 text-black" />
-            </div>
-            <span className="text-2xl font-bold text-black">Data Guru</span>
+            <Logo className="w-10 h-10" width={40} height={40} />
+            <Link href="/" className="text-2xl font-bold text-black hover:text-yellow-600 transition-colors">
+              Data Guru
+            </Link>
           </div>
 
           <div className="hidden md:flex items-center space-x-8">
-            <Link href="#features" className="text-black hover:text-yellow-600 transition-colors font-medium">
+            <Link href="/#features" className="text-black hover:text-yellow-600 transition-colors font-medium">
               Features
             </Link>
-            <Link href="#chatbot" className="text-black hover:text-yellow-600 transition-colors font-medium">
+            <Link href="/chat" className="text-black hover:text-yellow-600 transition-colors font-medium">
               Chatbot
             </Link>
-            <Link href="#trends" className="text-black hover:text-yellow-600 transition-colors font-medium">
+            <Link href="/trends" className="text-black hover:text-yellow-600 transition-colors font-medium">
               Trends
             </Link>
             <SignedOut>

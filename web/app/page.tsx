@@ -1,7 +1,6 @@
-import { auth } from "@clerk/nextjs/server";
-
-import React from "react";
+"use client";
 import { Button } from "@/components/ui/button";
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -22,11 +21,8 @@ import {
   ArrowRight,
   Star,
 } from "lucide-react";
-
-export default async function DataGuruHomepage (){
-  const { userId } = await auth();
-  // Using userId for authentication status
-  const isAuthenticated = !!userId;
+export default async function DataGuruHomepage() {
+  
   return (
     <div className="min-h-screen bg-gradient-to-br from-white via-yellow-50 to-white">
 
@@ -55,17 +51,21 @@ export default async function DataGuruHomepage (){
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-              <Button className="bg-black text-white hover:bg-gray-800 px-8 py-6 text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300">
-                Get Started
-                <ArrowRight className="w-5 h-5 ml-2" />
-              </Button>
-              <Button
-                variant="outline"
-                className="border-2 border-yellow-400 text-black hover:bg-yellow-50 px-8 py-6 text-lg font-semibold rounded-xl"
-              >
-                <MessageSquare className="w-5 h-5 mr-2" />
-                Try Chatbot
-              </Button>
+              <Link href="/chat">
+                <Button className="bg-black text-white hover:bg-gray-800 px-8 py-6 text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300">
+                  Get Started
+                  <ArrowRight className="w-5 h-5 ml-2" />
+                </Button>
+              </Link>
+              <Link href="/chat">
+                <Button
+                  variant="outline"
+                  className="border-2 border-yellow-400 text-black hover:bg-yellow-50 px-8 py-6 text-lg font-semibold rounded-xl"
+                >
+                  <MessageSquare className="w-5 h-5 mr-2" />
+                  Try Chatbot
+                </Button>
+              </Link>
             </div>
           </div>
         </div>
@@ -193,10 +193,12 @@ export default async function DataGuruHomepage (){
                     Project guidance and best practices
                   </li>
                 </ul>
-                <Button className="bg-black text-white hover:bg-gray-800 px-6 py-3 rounded-xl">
-                  Start Chatting
-                  <MessageSquare className="w-4 h-4 ml-2" />
-                </Button>
+                <Link href="/chat">
+                  <Button className="bg-black text-white hover:bg-gray-800 px-6 py-3 rounded-xl">
+                    Start Chatting
+                    <MessageSquare className="w-4 h-4 ml-2" />
+                  </Button>
+                </Link>
               </div>
               <div className="bg-gradient-to-br from-yellow-100 to-yellow-200 rounded-2xl p-8 border-2 border-yellow-300">
                 <div className="bg-white rounded-xl p-6 shadow-lg">
@@ -212,8 +214,7 @@ export default async function DataGuruHomepage (){
                     How can I help you with your data science project today?
                   </p>
                   <div className="bg-gray-100 rounded-lg p-3 text-sm text-gray-600">
-                    "Explain the difference between supervised and unsupervised
-                    learning"
+                    &quot;Explain the difference between supervised and unsupervised learning&quot;
                   </div>
                 </div>
               </div>
@@ -316,12 +317,14 @@ export default async function DataGuruHomepage (){
               Get Started Now
               <ArrowRight className="w-5 h-5 ml-2" />
             </Button>
-            <Button
-              variant="outline"
-              className="border-2 border-yellow-400 text-black hover:bg-yellow-50 px-8 py-4 text-lg font-semibold rounded-xl"
-            >
-              Learn More
-            </Button>
+            <a href="/#features">
+              <Button
+                variant="outline"
+                className="border-2 border-yellow-400 text-black hover:bg-yellow-50 px-8 py-4 text-lg font-semibold rounded-xl"
+              >
+                Learn More
+              </Button>
+            </a>
           </div>
         </div>
       </section>

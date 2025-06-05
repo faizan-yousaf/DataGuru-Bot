@@ -1,4 +1,4 @@
-"use client"
+'use client';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -8,9 +8,8 @@ import {
   Brain, Sparkles, Image as ImageIcon, FileText, ArrowRight,
   Zap, Database, Bot, TrendingUp
 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { Components } from 'react-markdown';
 import { SYSTEM_PROMPT } from '@/data/prompt';
-import { Check, Copy as CopyIcon } from 'lucide-react';
 
 
 // =============================================================================
@@ -47,14 +46,21 @@ interface ChatState {
   error: string | null;
 }
 
+interface ImageProcessingState {
+  isProcessing: boolean;
+  extractedText: string | null;
+  error: string | null;
+}
+
 interface SuggestedPrompt {
   id: string;
   title: string;
   description: string;
   prompt: string;
-  icon: React.ComponentType<any>;
+  icon: React.ComponentType<{ className?: string }>; // Fixed: Replace 'any' with proper type
   category: 'rag' | 'agentic' | 'neural' | 'advanced';
 }
+
 
 // =============================================================================
 // UTILITY FUNCTIONS
@@ -222,15 +228,21 @@ const useGeminiChat = () => {
   const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
   const model = genAI?.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-  const sendMessage = useCallback(async (content: string, attachments: MessageAttachment[] = []) => {
+  const sendMessage = useCallback(async (content: string, attachments: MessageAttachment[] = [], extractedText?: string) => {
     if (!model) {
       setState(prev => ({ ...prev, error: 'API key not configured' }));
       return;
     }
 
+    // If there's extracted text from an image, prepend it to the content
+    let finalContent = content;
+    if (extractedText) {
+      finalContent = `I uploaded an image with the following extracted text:\n\n${extractedText}\n\nPlease help me with: ${content || 'analyzing this content'}`;
+    }
+
     const userMessage: ChatMessage = {
       id: generateId(),
-      content,
+      content: finalContent,
       role: 'user',
       timestamp: Date.now(),
       attachments
@@ -378,7 +390,7 @@ const useGeminiChat = () => {
       });
 
       const result = await chat.sendMessage(previousMessage.content);
-      const response = await result.response;
+      const response = result.response;
       const text = response.text();
 
       setState(prev => ({
@@ -390,13 +402,15 @@ const useGeminiChat = () => {
         ),
         isTyping: false
       }));
-    } catch (error) {
+    } catch {
       setState(prev => ({ ...prev, isTyping: false }));
     }
   }, [state.messages, model]);
 
   return {
-    ...state,
+    messages: state.messages,
+    isTyping: state.isTyping,
+    error: state.error,
     sendMessage,
     updateReaction,
     regenerateMessage,
@@ -602,86 +616,9 @@ const RelatedPrompts: React.FC<{
     </motion.div>
   );
 };
-const CodeBlock: React.FC<{
-  children: string;
-  className?: string;
-}> = ({ children, className }) => {
-  const { copiedStates, copyCode } = useCodeCopy();
-  const blockId = useRef(generateId()).current;
-  
-  // Extract language from className (format: language-python)
-  const language = className?.replace('language-', '') || 'text';
-  const isCopied = copiedStates[blockId];
-  
-  // Add line numbers to code
-  const addLineNumbers = (code: string) => {
-    const lines = code.split('\n');
-    return lines.map((line, index) => ({
-      number: index + 1,
-      content: line
-    }));
-  };
-
-  const codeLines = addLineNumbers(children.trim());
-
-  return (
-    <div className="relative group my-4 rounded-lg overflow-hidden border border-gray-700">
-      {/* Header */}
-      <div className="flex items-center justify-between bg-gray-800 text-gray-300 px-4 py-2 text-sm">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-green-500"></div>
-          <span className="font-medium capitalize">{language}</span>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => copyCode(children.trim(), blockId)}
-          className="h-7 px-2 text-gray-400 hover:text-white hover:bg-gray-700 transition-all duration-200 opacity-60 group-hover:opacity-100"
-        >
-          {isCopied ? (
-            <>
-              <Check className="w-3 h-3 mr-1" />
-              <span className="text-xs">Copied!</span>
-            </>
-          ) : (
-            <>
-              <CopyIcon className="w-3 h-3 mr-1" />
-              <span className="text-xs">Copy</span>
-            </>
-          )}
-        </Button>
-      </div>
-      
-      {/* Code Content */}
-      <div className="bg-gray-900 text-gray-100 overflow-x-auto">
-        <div className="flex text-sm font-mono">
-          {/* Line Numbers */}
-          <div className="bg-gray-800 text-gray-500 px-3 py-4 select-none border-r border-gray-700 min-w-[3rem]">
-            {codeLines.map(line => (
-              <div key={line.number} className="text-right leading-6 text-xs">
-                {line.number}
-              </div>
-            ))}
-          </div>
-          
-          {/* Code Lines */}
-          <div className="flex-1 px-4 py-4">
-            {codeLines.map(line => (
-              <div key={line.number} className="leading-6 min-h-[1.5rem]">
-                <span className={`code-${language}`}>
-                  {line.content || ' '}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 const InlineCode: React.FC<{ children: string }> = ({ children }) => (
-  <code className="bg-blue-50 text-blue-800 px-2 py-1 rounded text-sm font-mono border border-blue-200 mx-1">
+  <code className="bg-gray-800 text-green-400 px-2 py-1 rounded-md text-sm font-mono border border-gray-700 mx-1 shadow-sm">
     {children}
   </code>
 );
@@ -853,6 +790,190 @@ const AttachmentMenu: React.FC<{
   );
 };
 
+const ChatMessage: React.FC<{
+  message: ChatMessage;
+  onAction: (action: string, messageId: string) => void;
+}> = ({ message, onAction }) => {
+  const isUser = message.role === 'user';
+  
+  const components: Components = {
+    code: ({ inline, className, children, ...props }: any) => {
+      if (inline) {
+        return (
+          <code className="bg-gray-800 text-green-400 px-2 py-1 rounded-md text-sm font-mono border border-gray-700 mx-1 shadow-sm">
+            {String(children)}
+          </code>
+        );
+      }
+      
+      // Extract language from className (e.g., "language-javascript")
+      const language = className?.replace('language-', '') || 'text';
+      
+      return (
+        <div className="my-6 rounded-xl overflow-hidden shadow-lg border border-gray-700">
+          {/* Code block header */}
+          <div className="bg-gray-800 px-4 py-2 flex items-center justify-between border-b border-gray-700">
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1.5">
+                <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                <div className="w-3 h-3 rounded-full bg-green-500"></div>
+              </div>
+              <span className="text-gray-400 text-sm font-medium ml-2">
+                {language.toUpperCase()}
+              </span>
+            </div>
+            <button 
+              onClick={() => navigator.clipboard.writeText(String(children))}
+              className="text-gray-400 hover:text-white transition-colors p-1 rounded hover:bg-gray-700"
+              title="Copy code"
+            >
+              <Copy className="w-4 h-4" />
+            </button>
+          </div>
+          
+          {/* Code content */}
+        <pre className="bg-gray-900 text-black p-4 overflow-x-auto" {...props}>
+          <code className={`${className} block text-sm leading-relaxed`}>
+            {children}
+          </code>
+        </pre>
+        </div>
+      );
+    },
+    
+    // Enhanced blockquote styling
+    blockquote: ({ children, ...props }) => (
+      <blockquote 
+        className="border-l-4 border-blue-500 bg-blue-50 pl-4 py-2 my-4 italic text-gray-700 rounded-r-lg"
+        {...props}
+      >
+        {children}
+      </blockquote>
+    ),
+    
+    // Enhanced heading styles
+    h1: ({ children, ...props }) => (
+      <h1 className="text-2xl font-bold text-gray-900 mt-6 mb-4 pb-2 border-b border-gray-200" {...props}>
+        {children}
+      </h1>
+    ),
+    h2: ({ children, ...props }) => (
+      <h2 className="text-xl font-semibold text-gray-800 mt-5 mb-3" {...props}>
+        {children}
+      </h2>
+    ),
+    h3: ({ children, ...props }) => (
+      <h3 className="text-lg font-medium text-gray-800 mt-4 mb-2" {...props}>
+        {children}
+      </h3>
+    ),
+    
+    // Enhanced list styling
+    ul: ({ children, ...props }) => (
+      <ul className="list-disc list-inside space-y-1 my-3 text-gray-700" {...props}>
+        {children}
+      </ul>
+    ),
+    ol: ({ children, ...props }) => (
+      <ol className="list-decimal list-inside space-y-1 my-3 text-gray-700" {...props}>
+        {children}
+      </ol>
+    ),
+    
+    // Enhanced table styling
+    table: ({ children, ...props }) => (
+      <div className="overflow-x-auto my-4">
+        <table className="min-w-full border border-gray-300 rounded-lg overflow-hidden" {...props}>
+          {children}
+        </table>
+      </div>
+    ),
+    th: ({ children, ...props }) => (
+      <th className="bg-gray-100 border border-gray-300 px-4 py-2 text-left font-semibold text-gray-800" {...props}>
+        {children}
+      </th>
+    ),
+    td: ({ children, ...props }) => (
+      <td className="border border-gray-300 px-4 py-2 text-gray-700" {...props}>
+        {children}
+      </td>
+    ),
+    
+    // Enhanced paragraph styling
+    p: ({ children, ...props }) => (
+      <p className="text-gray-700 leading-relaxed my-2" {...props}>
+        {children}
+      </p>
+    ),
+    
+    // Enhanced link styling
+    a: ({ children, href, ...props }) => (
+      <a 
+        href={href} 
+        className="text-blue-600 hover:text-blue-800 underline decoration-blue-300 hover:decoration-blue-500 transition-colors"
+        target="_blank"
+        rel="noopener noreferrer"
+        {...props}
+      >
+        {children}
+      </a>
+    ),
+    
+    // Enhanced strong/bold styling
+    strong: ({ children, ...props }) => (
+      <strong className="font-semibold text-gray-900" {...props}>
+        {children}
+      </strong>
+    ),
+    
+    // Enhanced emphasis/italic styling
+    em: ({ children, ...props }) => (
+      <em className="italic text-gray-800" {...props}>
+        {children}
+      </em>
+    )
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} group`}
+    >
+      <div className={`max-w-3xl px-6 py-4 rounded-2xl ${
+        isUser 
+          ? 'bg-blue-600 text-white ml-12' 
+          : 'bg-white text-gray-900 mr-12 shadow-lg border border-gray-200'
+      }`}>
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="mb-3 space-y-2">
+            {message.attachments.map(attachment => (
+              <div key={attachment.id} className="flex items-center gap-2 text-sm opacity-80">
+                {attachment.type === 'image' && <ImageIcon className="w-4 h-4" />}
+                {attachment.type === 'link' && <Link className="w-4 h-4" />}
+                {attachment.type === 'document' && <FileText className="w-4 h-4" />}
+                <span>{attachment.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        
+        <div className="prose prose-sm max-w-none">
+          <ReactMarkdown components={components}>
+            {message.content}
+          </ReactMarkdown>
+        </div>
+        
+        {!isUser && (
+          <MessageActions message={message} onAction={onAction} />
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
 const MessageActions: React.FC<{
   message: ChatMessage;
   onAction: (action: string, messageId: string) => void;
@@ -899,93 +1020,6 @@ const MessageActions: React.FC<{
   );
 };
 
-const MessageBubble: React.FC<{
-  message: ChatMessage;
-  onAction: (action: string, messageId: string) => void;
-}> = ({ message, onAction }) => {
-  const isUser = message.role === 'user';
-
-  const renderAttachment = (attachment: MessageAttachment) => {
-    switch (attachment.type) {
-      case 'image':
-        return (
-          <img 
-            src={attachment.url} 
-            alt={attachment.name}
-            className="max-w-sm rounded-lg border border-gray-200 mt-2"
-          />
-        );
-      case 'link':
-        return (
-          <a 
-            href={attachment.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 mt-2 p-2 bg-blue-50 rounded-lg text-blue-600 hover:bg-blue-100 transition-colors"
-          >
-            <Link className="w-3 h-3" />
-            <span className="text-sm underline">{attachment.name}</span>
-          </a>
-        );
-      default:
-        return (
-          <div className="flex items-center gap-2 mt-2 p-2 bg-gray-50 rounded-lg">
-            <FileText className="w-4 h-4 text-gray-500" />
-            <span className="text-sm text-gray-700">{attachment.name}</span>
-          </div>
-        );
-    }
-  };
-
-  // Custom renderers for ReactMarkdown
-  const components = {
-    code: ({ node, inline, className, children, ...props }: any) => {
-      const codeContent = String(children).replace(/\n$/, '');
-      
-      return !inline ? (
-        <CodeBlock className={className}>
-          {codeContent}
-        </CodeBlock>
-      ) : (
-        <InlineCode>{codeContent}</InlineCode>
-      );
-    },
-    pre: ({ children }: any) => <>{children}</>, // Prevent double wrapping
-  };
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'} group`}
-    >
-      <div className={`
-        max-w-[85%] p-4 rounded-2xl shadow-sm
-        ${isUser 
-          ? 'bg-gradient-to-br from-blue-600 to-blue-700 text-white ml-12' 
-          : 'bg-white border border-gray-200 mr-12'
-        }
-      `}>
-        <div className="whitespace-pre-wrap leading-relaxed text-sm prose prose-sm max-w-none">
-          <ReactMarkdown components={components}>
-            {message.content}
-          </ReactMarkdown>
-        </div>
-        
-        {message.attachments?.map((attachment) => (
-          <div key={attachment.id}>
-            {renderAttachment(attachment)}
-          </div>
-        ))}
-        
-        {!isUser && (
-          <MessageActions message={message} onAction={onAction} />
-        )}
-      </div>
-    </motion.div>
-  );
-};
-
 const ConfigurationError: React.FC = () => (
   <div className="flex items-center justify-center h-screen bg-gray-50">
     <div className="bg-white rounded-2xl p-8 text-center max-w-md shadow-lg border border-gray-200">
@@ -1000,13 +1034,20 @@ const ConfigurationError: React.FC = () => (
 // MAIN CHAT COMPONENT
 // =============================================================================
 
-const ChatApplication: React.FC = () => {
+const ChatApplication: React.FC<{}> = () => {
   const [inputValue, setInputValue] = useState('');
   const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [showLinkInput, setShowLinkInput] = useState(false);
   const [linkInput, setLinkInput] = useState('');
   const [relatedPrompts, setRelatedPrompts] = useState<SuggestedPrompt[]>([]);
+  
+  // Add image processing state
+  const [imageProcessing, setImageProcessing] = useState<ImageProcessingState>({
+    isProcessing: false,
+    extractedText: null,
+    error: null
+  });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const attachmentMenuRef = useClickOutside(() => setShowAttachmentMenu(false));
@@ -1018,122 +1059,68 @@ const ChatApplication: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-// 
-// 7. Add basic syntax highlighting function (optional enhancement):
-const highlightSyntax = (code: string, language: string): string => {
-  if (!code) return code;
-  
-  // Basic keyword highlighting for common languages
-  const keywords: Record<string, string[]> = {
-    python: ['def', 'class', 'import', 'from', 'if', 'else', 'elif', 'for', 'while', 'return', 'try', 'except', 'with', 'as', 'and', 'or', 'not', 'in', 'is'],
-    javascript: ['function', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'return', 'class', 'import', 'export', 'async', 'await', 'try', 'catch'],
-    sql: ['SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'GROUP', 'ORDER', 'BY'],
-    r: ['function', 'if', 'else', 'for', 'while', 'return', 'library', 'data', 'summary', 'plot', 'ggplot']
-  };
-  
-  const langKeywords = keywords[language.toLowerCase()] || [];
-  
-  let highlighted = code;
-  
-  // Highlight keywords
-  langKeywords.forEach(keyword => {
-    const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
-    highlighted = highlighted.replace(regex, `<span class="token-keyword">${keyword}</span>`);
-  });
-  
-  // Highlight strings
-  highlighted = highlighted.replace(/(["'`])((?:(?!\1)[^\\]|\\.)*)(\1)/g, '<span class="token-string">$1$2$3</span>');
-  
-  // Highlight comments
-  highlighted = highlighted.replace(/(#.*$|\/\/.*$|\/\*[\s\S]*?\*\/)/gm, '<span class="token-comment">$1</span>');
-  
-  // Highlight numbers
-  highlighted = highlighted.replace(/\b\d+\.?\d*\b/g, '<span class="token-number">$&</span>');
-  
-  return highlighted;
-};
+  // Add function to process image through Hugging Face
+  const processImageForText = useCallback(async (file: File): Promise<string | null> => {
+    setImageProcessing(prev => ({ ...prev, isProcessing: true, error: null }));
+    
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
 
-// 8. Enhanced CodeBlock with basic syntax highlighting:
-const EnhancedCodeBlock: React.FC<{
-  children: string;
-  className?: string;
-}> = ({ children, className }) => {
-  const { copiedStates, copyCode } = useCodeCopy();
-  const blockId = useRef(generateId()).current;
-  
-  const language = className?.replace('language-', '') || 'text';
-  const isCopied = copiedStates[blockId];
-  
-  const addLineNumbers = (code: string) => {
-    const lines = code.split('\n');
-    return lines.map((line, index) => ({
-      number: index + 1,
-      content: highlightSyntax(line, language)
-    }));
-  };
+      const response = await fetch('/api/extract-text', {
+        method: 'POST',
+        body: formData,
+      });
 
-  const codeLines = addLineNumbers(children.trim());
+      const data = await response.json();
 
-  return (
-    <div className="relative group my-4 rounded-lg overflow-hidden border border-gray-700 code-block-container">
-      <div className="flex items-center justify-between bg-gray-800 text-gray-300 px-4 py-2 text-sm">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
-          <span className="font-medium capitalize">{language}</span>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => copyCode(children.trim(), blockId)}
-          className="h-7 px-2 text-gray-400 hover:text-white hover:bg-gray-700 transition-all duration-200 opacity-60 group-hover:opacity-100 hover:scale-105"
-        >
-          {isCopied ? (
-            <>
-              <Check className="w-3 h-3 mr-1 text-green-400" />
-              <span className="text-xs text-green-400">Copied!</span>
-            </>
-          ) : (
-            <>
-              <CopyIcon className="w-3 h-3 mr-1" />
-              <span className="text-xs">Copy</span>
-            </>
-          )}
-        </Button>
-      </div>
-      
-      <div className="bg-gray-900 text-gray-100 overflow-x-auto">
-        <div className="flex text-sm font-mono">
-          <div className="bg-gray-800 text-gray-500 px-3 py-4 select-none border-r border-gray-700 min-w-[3rem]">
-            {codeLines.map(line => (
-              <div key={line.number} className="text-right leading-6 text-xs hover:text-gray-300 transition-colors">
-                {line.number}
-              </div>
-            ))}
-          </div>
-          
-          <div className="flex-1 px-4 py-4">
-            {codeLines.map(line => (
-              <div key={line.number} className="leading-6 min-h-[1.5rem] hover:bg-gray-800 hover:bg-opacity-30 transition-colors rounded px-1 -mx-1">
-                <span 
-                  className={`code-${language}`}
-                  dangerouslySetInnerHTML={{ __html: line.content || ' ' }}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-
+      if (data.success) {
+        setImageProcessing(prev => ({ 
+          ...prev, 
+          isProcessing: false, 
+          extractedText: data.extractedText 
+        }));
+        return data.extractedText;
+      } else {
+        setImageProcessing(prev => ({ 
+          ...prev, 
+          isProcessing: false, 
+          error: data.error || 'Failed to extract text from image' 
+        }));
+        return null;
+      }
+    } catch (error) {
+      setImageProcessing(prev => ({ 
+        ...prev, 
+        isProcessing: false, 
+        error: 'Network error occurred while processing image' 
+      }));
+      return null;
+    }
+  }, []);
 
   const handleSendMessage = useCallback(async () => {
     if (!inputValue.trim() && attachments.length === 0) return;
 
-    const messageContent = inputValue.trim() || 'Shared attachments';
-    await sendMessage(messageContent, attachments);
+    let extractedText: string | null = null;
+    
+    // Check if there are any image attachments to process
+    const imageAttachments = attachments.filter(att => att.type === 'image');
+    
+    if (imageAttachments.length > 0) {
+      // Process the first image attachment for text extraction
+      const imageFile = await fetch(imageAttachments[0].url).then(r => r.blob());
+      const file = new File([imageFile], imageAttachments[0].name, { type: 'image/*' });
+      extractedText = await processImageForText(file);
+      
+      if (!extractedText && imageProcessing.error) {
+        // If image processing failed, show error and don't send message
+        return;
+      }
+    }
+
+    const messageContent = inputValue.trim() || (extractedText ? 'Please analyze this image content' : 'Shared attachments');
+    await sendMessage(messageContent, attachments, extractedText || undefined);
     
     // Generate related prompts based on user query
     if (messageContent !== 'Shared attachments') {
@@ -1143,7 +1130,8 @@ const EnhancedCodeBlock: React.FC<{
     
     setInputValue('');
     setAttachments([]);
-  }, [inputValue, attachments, sendMessage]);
+    setImageProcessing({ isProcessing: false, extractedText: null, error: null });
+  }, [inputValue, attachments, sendMessage, processImageForText, imageProcessing.error]);
   
   const handlePromptSelect = useCallback((prompt: string) => {
     setInputValue(prompt);
@@ -1172,6 +1160,11 @@ const EnhancedCodeBlock: React.FC<{
       size: file.size
     };
     setAttachments(prev => [...prev, attachment]);
+    
+    // Reset image processing state when new file is selected
+    if (file.type.startsWith('image/')) {
+      setImageProcessing({ isProcessing: false, extractedText: null, error: null });
+    }
   }, []);
 
   const handleLinkSubmit = useCallback(() => {
@@ -1259,7 +1252,7 @@ const EnhancedCodeBlock: React.FC<{
             <>
               <AnimatePresence>
                 {messages.map(message => (
-                  <MessageBubble 
+                  <ChatMessage
                     key={message.id} 
                     message={message} 
                     onAction={handleMessageAction} 
@@ -1272,6 +1265,45 @@ const EnhancedCodeBlock: React.FC<{
                   <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
                   <span className="text-sm text-gray-500">Thinking...</span>
                 </div>
+              )}
+              
+              {/* Add image processing status */}
+              {imageProcessing.isProcessing && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg border border-blue-200"
+                >
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                  <span className="text-blue-700">Processing image for text extraction...</span>
+                </motion.div>
+              )}
+              
+              {imageProcessing.error && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex items-center gap-3 p-4 bg-red-50 rounded-lg border border-red-200"
+                >
+                  <X className="w-5 h-5 text-red-500" />
+                  <span className="text-red-700">{imageProcessing.error}</span>
+                </motion.div>
+              )}
+              
+              {imageProcessing.extractedText && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="p-4 bg-green-50 rounded-lg border border-green-200"
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <ImageIcon className="w-5 h-5 text-green-500" />
+                    <span className="font-medium text-green-700">Text extracted from image:</span>
+                  </div>
+                  <div className="text-sm text-green-600 bg-white p-3 rounded border font-mono">
+                    {imageProcessing.extractedText}
+                  </div>
+                </motion.div>
               )}
               
               {/* Show related prompts after the last assistant message */}
@@ -1379,7 +1411,7 @@ const EnhancedCodeBlock: React.FC<{
             
             <Button
               onClick={handleSendMessage}
-              disabled={isTyping || (!inputValue.trim() && attachments.length === 0)}
+              disabled={isTyping || imageProcessing.isProcessing || (!inputValue.trim() && attachments.length === 0)}
               className="shadow-lg"
             >
               <Send className="w-4 h-4" />
@@ -1392,21 +1424,3 @@ const EnhancedCodeBlock: React.FC<{
 };
 
 export default ChatApplication;
-
-const useCodeCopy = () => {
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-
-  const copyCode = useCallback(async (code: string, blockId: string) => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopiedStates(prev => ({ ...prev, [blockId]: true }));
-      setTimeout(() => {
-        setCopiedStates(prev => ({ ...prev, [blockId]: false }));
-      }, 2000);
-    } catch (error) {
-      console.error('Failed to copy code:', error);
-    }
-  }, []);
-
-  return { copiedStates, copyCode };
-};
