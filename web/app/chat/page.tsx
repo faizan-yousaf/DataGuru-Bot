@@ -418,14 +418,17 @@ const useGeminiChat = () => {
   };
 };
 
-const useVoiceRecorder = () => {
+const useAssemblyAIVoiceRecorder = () => {
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
 
   const startRecording = useCallback(async (): Promise<void> => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      const recorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus' // Better compression
+      });
       
       setMediaRecorder(recorder);
       setIsRecording(true);
@@ -435,7 +438,7 @@ const useVoiceRecorder = () => {
     }
   }, []);
 
-  const stopRecording = useCallback((): Promise<File | null> => {
+  const stopRecordingAndTranscribe = useCallback(async (): Promise<string | null> => {
     return new Promise((resolve) => {
       if (!mediaRecorder) {
         resolve(null);
@@ -450,21 +453,50 @@ const useVoiceRecorder = () => {
         }
       };
 
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(chunks, { type: 'audio/wav' });
-        const audioFile = new File([audioBlob], `voice-${Date.now()}.wav`, { type: 'audio/wav' });
-        resolve(audioFile);
-        
-        mediaRecorder.stream.getTracks().forEach(track => track.stop());
-        setIsRecording(false);
-        setMediaRecorder(null);
+      mediaRecorder.onstop = async () => {
+        try {
+          setIsTranscribing(true);
+          
+          const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+          const audioFile = new File([audioBlob], `voice-${Date.now()}.webm`, { type: 'audio/webm' });
+          
+          // Send to AssemblyAI for transcription
+          const formData = new FormData();
+          formData.append('audio', audioFile);
+          
+          const response = await fetch('/api/transcribe', {
+            method: 'POST',
+            body: formData,
+          });
+          
+          if (!response.ok) {
+            throw new Error('Transcription failed');
+          }
+          
+          const result = await response.json();
+          resolve(result.text || null);
+          
+        } catch (error) {
+          console.error('Transcription error:', error);
+          resolve(null);
+        } finally {
+          setIsTranscribing(false);
+          mediaRecorder.stream.getTracks().forEach(track => track.stop());
+          setIsRecording(false);
+          setMediaRecorder(null);
+        }
       };
 
       mediaRecorder.stop();
     });
   }, [mediaRecorder]);
 
-  return { isRecording, startRecording, stopRecording };
+  return { 
+    isRecording, 
+    isTranscribing, 
+    startRecording, 
+    stopRecordingAndTranscribe 
+  };
 };
 
 const useClickOutside = (callback: () => void) => {
@@ -1053,7 +1085,7 @@ const ChatApplication: React.FC<{}> = () => {
   const attachmentMenuRef = useClickOutside(() => setShowAttachmentMenu(false));
 
   const { messages, isTyping, sendMessage, updateReaction, regenerateMessage, isConfigured } = useGeminiChat();
-  const { isRecording, startRecording, stopRecording } = useVoiceRecorder();
+  const { isRecording, isTranscribing, startRecording, stopRecordingAndTranscribe } = useAssemblyAIVoiceRecorder();
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1184,14 +1216,17 @@ const ChatApplication: React.FC<{}> = () => {
 
   const handleVoiceToggle = useCallback(async () => {
     if (isRecording) {
-      const audioFile = await stopRecording();
-      if (audioFile) {
-        handleFileSelect(audioFile);
+      const transcribedText = await stopRecordingAndTranscribe();
+      if (transcribedText) {
+        // Directly send the transcribed text to the chat
+        setInputValue(transcribedText);
+        // Optionally auto-send the message
+        // handleSendMessage(transcribedText);
       }
     } else {
       await startRecording();
     }
-  }, [isRecording, startRecording, stopRecording, handleFileSelect]);
+  }, [isRecording, startRecording, stopRecordingAndTranscribe]);
 
   const handleMessageAction = useCallback(async (action: string, messageId: string) => {
     const message = messages.find(m => m.id === messageId);
@@ -1404,9 +1439,16 @@ const ChatApplication: React.FC<{}> = () => {
               variant={isRecording ? 'danger' : 'secondary'}
               size="icon"
               onClick={handleVoiceToggle}
-              className={isRecording ? 'animate-pulse' : ''}
+              className={isRecording || isTranscribing ? 'animate-pulse' : ''}
+              disabled={isTranscribing}
             >
-              {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              {isTranscribing ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : isRecording ? (
+                <MicOff className="w-4 h-4" />
+              ) : (
+                <Mic className="w-4 h-4" />
+              )}
             </Button>
             
             <Button
