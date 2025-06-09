@@ -1,6 +1,7 @@
 "use client";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
+import { SignedIn, SignedOut } from '@clerk/nextjs';
 import {
   Card,
   CardContent,
@@ -51,12 +52,24 @@ export default async function DataGuruHomepage() {
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-              <Link href="/chat">
-                <Button className="bg-black text-white hover:bg-gray-800 px-8 py-6 text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300">
-                  Get Started
-                  <ArrowRight className="w-5 h-5 ml-2" />
-                </Button>
-              </Link>
+              {/* Conditional Get Started Button */}
+              <SignedOut>
+                <Link href="/sign-up">
+                  <Button className="bg-black text-white hover:bg-gray-800 px-8 py-6 text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300">
+                    Get Started
+                    <ArrowRight className="w-5 h-5 ml-2" />
+                  </Button>
+                </Link>
+              </SignedOut>
+              <SignedIn>
+                <Link href="/chat">
+                  <Button className="bg-black text-white hover:bg-gray-800 px-8 py-6 text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300">
+                    Get Started
+                    <ArrowRight className="w-5 h-5 ml-2" />
+                  </Button>
+                </Link>
+              </SignedIn>
+              
               <Link href="/chat">
                 <Button
                   variant="outline"
