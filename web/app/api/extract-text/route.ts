@@ -17,70 +17,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Convert File to Buffer
+    // Convert image to base64
     const bytes = await imageFile.arrayBuffer();
-    const imageBuffer = Buffer.from(bytes);
-
-    // Try multiple OCR models for better text extraction
-    let extractedText = '';
-    let modelUsed = '';
+    const base64Image = Buffer.from(bytes).toString('base64');
     
-    try {
-      // First try: Microsoft TrOCR for printed text
-      const result1 = await hf.imageToText({
-        data: new Blob([imageBuffer]),
-        model: 'microsoft/trocr-base-printed'
-      });
-      extractedText = result1.generated_text || '';
-      modelUsed = 'microsoft/trocr-base-printed';
-    } catch (error1) {
-      try {
-        // Second try: Microsoft TrOCR for handwritten text
-        const result2 = await hf.imageToText({
-          data: new Blob([imageBuffer]),
-          model: 'microsoft/trocr-base-handwritten'
-        });
-        extractedText = result2.generated_text || '';
-        modelUsed = 'microsoft/trocr-base-handwritten';
-      } catch (error2) {
-        try {
-          // Third try: Alternative OCR model
-          const result3 = await hf.imageToText({
-            data: new Blob([imageBuffer]),
-            model: 'microsoft/trocr-large-printed'
-          });
-          extractedText = result3.generated_text || '';
-          modelUsed = 'microsoft/trocr-large-printed';
-        } catch (error3) {
-          // Fallback: Use image captioning if OCR fails
-          const result4 = await hf.imageToText({
-            data: new Blob([imageBuffer]),
-            model: 'Salesforce/blip-image-captioning-base'
-          });
-          extractedText = result4.generated_text || '';
-          modelUsed = 'Salesforce/blip-image-captioning-base (fallback)';
-        }
-      }
-    }
-
+    // Use Gemini Vision for text extraction
+    const extractedText = await extractTextWithGeminiVision(base64Image, imageFile.type);
+    
     if (!extractedText || extractedText.trim() === '') {
       return NextResponse.json(
         { 
           error: 'No text could be extracted from the image',
-          details: 'The image may not contain readable text or the text quality is too poor'
+          details: 'The image may not contain readable text or the content is unclear'
         },
         { status: 400 }
       );
     }
 
-    // Send extracted text to Gemini for debugging
+    // Get debugging response
     const debugResponse = await getGeminiDebugResponse(extractedText);
 
     return NextResponse.json({
       success: true,
       extractedText: extractedText,
       debugResponse: debugResponse,
-      modelUsed: modelUsed
+      modelUsed: 'gemini-pro-vision'
     });
 
   } catch (error) {
@@ -95,8 +56,51 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Function to send extracted text to Gemini
-async function getGeminiDebugResponse(errorText: string) {
+// Function to extract text using Gemini Vision
+async function extractTextWithGeminiVision(base64Image: string, mimeType: string) {
+  try {
+    const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    
+    if (!apiKey) {
+      throw new Error('GEMINI_API_KEY environment variable is not set');
+    }
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            {
+              text: "Extract all text from this image, paying special attention to code, error messages, console output, and technical content. Preserve formatting, line breaks, and structure as much as possible. If this contains code or error messages, identify the programming language and error type. Only return the extracted text, nothing else."
+            },
+            {
+              inline_data: {
+                mime_type: mimeType,
+                data: base64Image
+              }
+            }
+          ]
+        }]
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gemini API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+  } catch (error) {
+    console.error('Error with Gemini Vision:', error);
+    return null;
+  }
+}
+
+// Enhanced Gemini function for code/error analysis
+async function getGeminiDebugResponse(extractedText: string) {
   try {
     const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
     
@@ -112,27 +116,33 @@ async function getGeminiDebugResponse(errorText: string) {
       body: JSON.stringify({
         contents: [{
           parts: [{
-            text: `I extracted this text from an image: "${errorText}". Please analyze this content and provide:
-            1. What type of content this is (error message, code snippet, documentation, etc.)
-            2. If it's an error, identify the error type and possible causes
-            3. Provide debugging solutions, explanations, or fixes
-            4. Include code examples if applicable
-            5. Suggest best practices to avoid similar issues
+            text: `I extracted this text from a code screenshot or error image: "${extractedText}". Please analyze this content and provide:
             
-            Please format your response in a clear, structured way with proper headings and code blocks where needed.`
+            1. **Content Type**: Identify if this is an error message, code snippet, console output, documentation, or other technical content
+            2. **Programming Language**: If applicable, identify the programming language or technology
+            3. **Error Analysis**: If it's an error, explain:
+               - Error type and severity
+               - Root cause analysis
+               - Common scenarios that lead to this error
+            4. **Solutions**: Provide step-by-step solutions or fixes
+            5. **Code Examples**: Include corrected code examples if applicable
+            6. **Prevention**: Best practices to avoid similar issues
+            7. **Additional Resources**: Suggest relevant documentation or learning materials
+            
+            Please format your response clearly with headers and bullet points for easy reading.`
           }]
         }]
       }),
     });
 
     if (!response.ok) {
-      throw new Error(`Gemini API request failed: ${response.status} ${response.statusText}`);
+      throw new Error(`Gemini API error: ${response.status}`);
     }
 
     const data = await response.json();
     return data.candidates?.[0]?.content?.parts?.[0]?.text || 'Unable to generate debug response';
   } catch (error) {
-    console.error('Gemini API error:', error);
-    return 'Error connecting to debugging service. Please check your GEMINI_API_KEY and try again.';
+    console.error('Error calling Gemini API:', error);
+    return 'Error occurred while generating debug response';
   }
 }
