@@ -27,10 +27,12 @@ interface ChatMessage {
 
 interface MessageAttachment {
   id: string;
-  type: 'image' | 'document' | 'audio' | 'link';
+  type: 'image' | 'document' | 'audio' | 'voice' | 'link';
   url: string;
   name: string;
   size?: number;
+  transcription?: string;
+  isTranscribed?: boolean;
 }
 
 interface MessageReactions {
@@ -194,6 +196,76 @@ const generateRelatedPrompts = (userQuery: string): SuggestedPrompt[] => {
   return relatedPrompts.slice(0, 3); // Return max 3 suggestions
 };
 
+const generateContextualRelatedPrompts = (currentQuery: string, chatHistory: ChatMessage[]): SuggestedPrompt[] => {
+  const query = currentQuery.toLowerCase();
+  const relatedPrompts: SuggestedPrompt[] = [];
+  
+  // Analyze recent conversation context (last 3 messages)
+  const recentMessages = chatHistory.slice(-6); // Last 3 exchanges (user + assistant)
+  const conversationContext = recentMessages.map(msg => msg.content.toLowerCase()).join(' ');
+  
+  // Context-aware suggestions based on conversation history
+  if (conversationContext.includes('error') || conversationContext.includes('debug') || query.includes('error')) {
+    relatedPrompts.push(
+      {
+        id: 'ctx1',
+        title: 'Error Prevention Strategies',
+        description: 'Learn how to prevent similar errors',
+        prompt: 'What are the best practices to prevent this type of error in the future? Include code review guidelines and testing strategies.',
+        icon: Brain,
+        category: 'advanced'
+      },
+      {
+        id: 'ctx2',
+        title: 'Debugging Techniques',
+        description: 'Advanced debugging methodologies',
+        prompt: 'What are the most effective debugging techniques for this type of issue? Include tools and systematic approaches.',
+        icon: Zap,
+        category: 'advanced'
+      }
+    );
+  }
+  
+  if (conversationContext.includes('rag') || conversationContext.includes('vector') || conversationContext.includes('embedding')) {
+    relatedPrompts.push(
+      {
+        id: 'ctx3',
+        title: 'RAG Performance Optimization',
+        description: 'Improve your RAG system based on our discussion',
+        prompt: 'Based on our conversation about RAG, how can I optimize the retrieval accuracy and reduce hallucinations?',
+        icon: Database,
+        category: 'rag'
+      }
+    );
+  }
+  
+  if (conversationContext.includes('model') || conversationContext.includes('training') || conversationContext.includes('neural')) {
+    relatedPrompts.push(
+      {
+        id: 'ctx4',
+        title: 'Model Fine-tuning',
+        description: 'Customize models for your specific use case',
+        prompt: 'How can I fine-tune the model we discussed for my specific dataset and requirements?',
+        icon: Brain,
+        category: 'neural'
+      }
+    );
+  }
+  
+  // If no context-specific suggestions, fall back to query-based suggestions
+  if (relatedPrompts.length === 0) {
+    return generateRelatedPrompts(currentQuery);
+  }
+  
+  // Add one general suggestion based on current query
+  const queryBasedSuggestions = generateRelatedPrompts(currentQuery);
+  if (queryBasedSuggestions.length > 0) {
+    relatedPrompts.push(queryBasedSuggestions[0]);
+  }
+  
+  return relatedPrompts.slice(0, 3);
+};
+
 const generateId = (): string => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
 const formatFileSize = (bytes: number): string => {
@@ -228,7 +300,7 @@ const useGeminiChat = () => {
   const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
   const model = genAI?.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-  const sendMessage = useCallback(async (content: string, attachments: MessageAttachment[] = [], extractedText?: string) => {
+  const sendMessage = useCallback(async (content: string, attachments: MessageAttachment[] = [], extractedText?: string, isErrorImage?: boolean) => {
     if (!model) {
       setState(prev => ({ ...prev, error: 'API key not configured' }));
       return;
@@ -237,13 +309,31 @@ const useGeminiChat = () => {
     // If there's extracted text from an image, prepend it to the content
     let finalContent = content;
     if (extractedText) {
-      finalContent = `I uploaded an image containing code/error content. Here's what was extracted:
+      if (isErrorImage) {
+        // For error images, include extracted text directly without showing it to user
+        finalContent = `I uploaded an error screenshot. Here's the extracted error content:
+
+\`\`\`
+${extractedText}
+\`\`\`
+
+${content || 'Please debug this error and provide solutions'}`;
+      } else {
+        finalContent = `I uploaded an image containing code/error content. Here's what was extracted:
 
 \`\`\`
 ${extractedText}
 \`\`\`
 
 Please help me analyze this: ${content || 'Please analyze this code/error and provide solutions'}`;
+      }
+    }
+
+    // Check for voice attachments and include transcription
+    const voiceAttachments = attachments.filter(att => att.type === 'voice' && att.transcription);
+    if (voiceAttachments.length > 0) {
+      const transcriptions = voiceAttachments.map(att => att.transcription).join(' ');
+      finalContent = transcriptions + (content ? ` ${content}` : '');
     }
 
     const userMessage: ChatMessage = {
@@ -282,7 +372,7 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
       // Add current message
       conversationHistory.push({
         role: 'user',
-        parts: [{ text: content }]
+        parts: [{ text: finalContent }]
       });
 
       // Start chat with history
@@ -290,7 +380,7 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
         history: conversationHistory.slice(0, -1), // All except the last message
       });
 
-      const result = await chat.sendMessage(content);
+      const result = await chat.sendMessage(finalContent);
       const response = await result.response;
       const text = response.text();
 
@@ -413,6 +503,26 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
     }
   }, [state.messages, model]);
 
+
+
+  const updateMessageAttachment = useCallback((messageId: string, attachmentId: string, updates: Partial<MessageAttachment>) => {
+    setState(prev => ({
+      ...prev,
+      messages: prev.messages.map(msg => 
+        msg.id === messageId 
+          ? {
+              ...msg,
+              attachments: msg.attachments?.map(att => 
+                att.id === attachmentId 
+                  ? { ...att, ...updates }
+                  : att
+              )
+            }
+          : msg
+      )
+    }));
+  }, []);
+
   return {
     messages: state.messages,
     isTyping: state.isTyping,
@@ -420,6 +530,7 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
     sendMessage,
     updateReaction,
     regenerateMessage,
+    updateMessageAttachment,
     isConfigured: !!apiKey
   };
 };
@@ -433,7 +544,7 @@ const useAssemblyAIVoiceRecorder = () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus' // Better compression
+        mimeType: 'audio/webm;codecs=opus'
       });
       
       setMediaRecorder(recorder);
@@ -444,7 +555,7 @@ const useAssemblyAIVoiceRecorder = () => {
     }
   }, []);
 
-  const stopRecordingAndTranscribe = useCallback(async (): Promise<string | null> => {
+  const stopRecordingAndCreateAttachment = useCallback(async (): Promise<MessageAttachment | null> => {
     return new Promise((resolve) => {
       if (!mediaRecorder) {
         resolve(null);
@@ -461,32 +572,24 @@ const useAssemblyAIVoiceRecorder = () => {
 
       mediaRecorder.onstop = async () => {
         try {
-          setIsTranscribing(true);
-          
           const audioBlob = new Blob(chunks, { type: 'audio/webm' });
           const audioFile = new File([audioBlob], `voice-${Date.now()}.webm`, { type: 'audio/webm' });
           
-          // Send to AssemblyAI for transcription
-          const formData = new FormData();
-          formData.append('audio', audioFile);
+          const attachment: MessageAttachment = {
+            id: generateId(),
+            type: 'voice',
+            url: URL.createObjectURL(audioBlob),
+            name: `Voice memo ${new Date().toLocaleTimeString()}`,
+            size: audioBlob.size,
+            isTranscribed: false
+          };
           
-          const response = await fetch('/api/transcribe', {
-            method: 'POST',
-            body: formData,
-          });
-          
-          if (!response.ok) {
-            throw new Error('Transcription failed');
-          }
-          
-          const result = await response.json();
-          resolve(result.text || null);
+          resolve(attachment);
           
         } catch (error) {
-          console.error('Transcription error:', error);
+          console.error('Voice recording error:', error);
           resolve(null);
         } finally {
-          setIsTranscribing(false);
           mediaRecorder.stream.getTracks().forEach(track => track.stop());
           setIsRecording(false);
           setMediaRecorder(null);
@@ -497,11 +600,42 @@ const useAssemblyAIVoiceRecorder = () => {
     });
   }, [mediaRecorder]);
 
+  const transcribeVoiceAttachment = useCallback(async (audioUrl: string): Promise<string | null> => {
+    try {
+      setIsTranscribing(true);
+      
+      const audioBlob = await fetch(audioUrl).then(r => r.blob());
+      const audioFile = new File([audioBlob], `voice-${Date.now()}.webm`, { type: 'audio/webm' });
+      
+      const formData = new FormData();
+      formData.append('audio', audioFile);
+      
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        throw new Error('Transcription failed');
+      }
+      
+      const result = await response.json();
+      return result.text || null;
+      
+    } catch (error) {
+      console.error('Transcription error:', error);
+      return null;
+    } finally {
+      setIsTranscribing(false);
+    }
+  }, []);
+
   return { 
     isRecording, 
     isTranscribing, 
     startRecording, 
-    stopRecordingAndTranscribe 
+    stopRecordingAndCreateAttachment,
+    transcribeVoiceAttachment
   };
 };
 
@@ -738,11 +872,13 @@ const Input: React.FC<{
 const AttachmentPreview: React.FC<{
   attachment: MessageAttachment;
   onRemove: () => void;
-}> = ({ attachment, onRemove }) => {
+  onTranscribe?: (attachmentId: string) => void;
+}> = ({ attachment, onRemove, onTranscribe }) => {
   const getIcon = () => {
     switch (attachment.type) {
       case 'image': return <ImageIcon className="w-4 h-4 text-blue-500" />;
-      case 'audio': return <Mic className="w-4 h-4 text-green-500" />;
+      case 'audio': 
+      case 'voice': return <Mic className="w-4 h-4 text-green-500" />;
       case 'link': return <Link className="w-4 h-4 text-purple-500" />;
       default: return <FileText className="w-4 h-4 text-gray-500" />;
     }
@@ -768,6 +904,27 @@ const AttachmentPreview: React.FC<{
               <p className="text-xs text-gray-500">{formatFileSize(attachment.size)}</p>
             )}
           </div>
+        </div>
+      ) : attachment.type === 'voice' ? (
+        <div className="flex items-center gap-3 w-full">
+          <div className="flex items-center justify-center w-12 h-12 bg-green-100 rounded-lg">
+            <Mic className="w-6 h-6 text-green-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-900">Voice Memo</p>
+            <p className="text-xs text-gray-500">{attachment.name}</p>
+            {attachment.transcription && (
+              <p className="text-xs text-blue-600 mt-1">Transcribed: {attachment.transcription.substring(0, 50)}...</p>
+            )}
+          </div>
+          {onTranscribe && !attachment.isTranscribed && (
+            <button
+              onClick={() => onTranscribe(attachment.id)}
+              className="px-3 py-1 text-xs bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+            >
+              Transcribe
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -871,7 +1028,8 @@ const AttachmentMenu: React.FC<{
 const ChatMessage: React.FC<{
   message: ChatMessage;
   onAction: (action: string, messageId: string) => void;
-}> = ({ message, onAction }) => {
+  onTranscribeVoice?: (messageId: string, attachmentId: string) => void;
+}> = ({ message, onAction, onTranscribeVoice }) => {
   const isUser = message.role === 'user';
   
   const components: Components = {
@@ -1032,7 +1190,28 @@ const ChatMessage: React.FC<{
                 {attachment.type === 'image' && <ImageIcon className="w-4 h-4" />}
                 {attachment.type === 'link' && <Link className="w-4 h-4" />}
                 {attachment.type === 'document' && <FileText className="w-4 h-4" />}
-                <span>{attachment.name}</span>
+                {attachment.type === 'voice' && (
+                  <div className="flex items-center gap-2 w-full">
+                    <Mic className="w-4 h-4" />
+                    <div className="flex-1">
+                      <span>{attachment.name}</span>
+                      {attachment.transcription && (
+                        <div className="text-xs mt-1 p-2 bg-black bg-opacity-20 rounded">
+                          <strong>Transcription:</strong> {attachment.transcription}
+                        </div>
+                      )}
+                    </div>
+                    {!attachment.isTranscribed && onTranscribeVoice && (
+                      <button
+                        onClick={() => onTranscribeVoice(message.id, attachment.id)}
+                        className="px-2 py-1 text-xs bg-white bg-opacity-20 rounded hover:bg-opacity-30 transition-colors"
+                      >
+                        Transcribe
+                      </button>
+                    )}
+                  </div>
+                )}
+                {attachment.type !== 'voice' && <span>{attachment.name}</span>}
               </div>
             ))}
           </div>
@@ -1130,8 +1309,24 @@ const ChatApplication: React.FC<{}> = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const attachmentMenuRef = useClickOutside(() => setShowAttachmentMenu(false));
 
-  const { messages, isTyping, sendMessage, updateReaction, regenerateMessage, isConfigured } = useGeminiChat();
-  const { isRecording, isTranscribing, startRecording, stopRecordingAndTranscribe } = useAssemblyAIVoiceRecorder();
+  const { messages, isTyping, sendMessage, updateReaction, regenerateMessage, updateMessageAttachment, isConfigured } = useGeminiChat();
+  const { isRecording, isTranscribing, startRecording, stopRecordingAndCreateAttachment, transcribeVoiceAttachment } = useAssemblyAIVoiceRecorder();
+
+  // Handle post-send voice transcription
+  const handlePostSendTranscription = useCallback(async (messageId: string, attachmentId: string) => {
+    const message = messages.find(m => m.id === messageId);
+    const attachment = message?.attachments?.find(att => att.id === attachmentId);
+    
+    if (!attachment || attachment.type !== 'voice') return;
+    
+    const transcription = await transcribeVoiceAttachment(attachment.url);
+    if (transcription) {
+      updateMessageAttachment(messageId, attachmentId, {
+        transcription,
+        isTranscribed: true
+      });
+    }
+  }, [messages, transcribeVoiceAttachment, updateMessageAttachment]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1179,22 +1374,37 @@ const ChatApplication: React.FC<{}> = () => {
   }, []);
 
   const handleSendMessage = useCallback(async () => {
-    if (!inputValue.trim() && attachments.length === 0) return;
+    // Check if we have voice attachments with transcriptions
+    const voiceAttachments = attachments.filter(att => att.type === 'voice' && att.transcription);
+    const hasVoiceContent = voiceAttachments.length > 0;
+    
+    // Allow sending if we have text input OR voice content
+    if (!inputValue.trim() && !hasVoiceContent && attachments.length === 0) {
+      return; // Nothing to send
+    }
 
     let extractedText: string | null = null;
+    let isErrorImage = false;
     
     // Check if there are any image attachments to process
     const imageAttachments = attachments.filter(att => att.type === 'image');
     
     if (imageAttachments.length > 0) {
+      // Check if this is an error screenshot based on filename or user intent
+      const imageAttachment = imageAttachments[0];
+      isErrorImage = imageAttachment.name.toLowerCase().includes('error') || 
+                     imageAttachment.name.toLowerCase().includes('screenshot') ||
+                     inputValue.toLowerCase().includes('error') ||
+                     inputValue.toLowerCase().includes('debug') ||
+                     inputValue.toLowerCase().includes('fix');
+      
       // Process the first image attachment for text extraction
       try {
-        const imageFile = await fetch(imageAttachments[0].url).then(r => r.blob());
-        const file = new File([imageFile], imageAttachments[0].name, { type: imageFile.type });
+        const imageFile = await fetch(imageAttachment.url).then(r => r.blob());
+        const file = new File([imageFile], imageAttachment.name, { type: imageFile.type });
         extractedText = await processImageForText(file);
         
         if (!extractedText && imageProcessing.error) {
-          // If image processing failed, show error but still allow sending
           console.warn('Image processing failed:', imageProcessing.error);
         }
       } catch (error) {
@@ -1202,29 +1412,35 @@ const ChatApplication: React.FC<{}> = () => {
       }
     }
 
-    const messageContent = inputValue.trim() || (extractedText ? `Please analyze this image content: ${extractedText}` : 'Shared attachments');
-    await sendMessage(messageContent, attachments, extractedText || undefined);
-    
-    // Generate related prompts based on user query
-    if (messageContent !== 'Shared attachments') {
-      const related = generateRelatedPrompts(messageContent);
-      setRelatedPrompts(related);
+    // For error images, don't show extracted text to user, pass directly to AI
+    let messageContent: string;
+    if (isErrorImage && extractedText) {
+      messageContent = inputValue.trim() || 'Please debug this error from the uploaded screenshot.';
+      // The extracted text will be passed separately to the AI model
+    } else {
+      messageContent = inputValue.trim() || (extractedText ? `Please analyze this image content: ${extractedText}` : 'Shared attachments');
     }
+    
+    await sendMessage(messageContent, attachments, extractedText || undefined, isErrorImage);
+    
+    // Generate related prompts based on user query and conversation history
+    const related = generateContextualRelatedPrompts(messageContent, messages);
+    setRelatedPrompts(related);
     
     setInputValue('');
     setAttachments([]);
     setImageProcessing({ isProcessing: false, extractedText: null, error: null });
-  }, [inputValue, attachments, sendMessage, processImageForText, imageProcessing.error]);
+  }, [inputValue, attachments, sendMessage, processImageForText, imageProcessing.error, messages]);
   
   const handlePromptSelect = useCallback((prompt: string) => {
     setInputValue(prompt);
     // Auto-send the selected prompt
     setTimeout(() => {
       sendMessage(prompt, []);
-      const related = generateRelatedPrompts(prompt);
+      const related = generateContextualRelatedPrompts(prompt, messages);
       setRelatedPrompts(related);
     }, 100);
-  }, [sendMessage]);
+  }, [sendMessage, messages]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -1267,17 +1483,42 @@ const ChatApplication: React.FC<{}> = () => {
 
   const handleVoiceToggle = useCallback(async () => {
     if (isRecording) {
-      const transcribedText = await stopRecordingAndTranscribe();
-      if (transcribedText) {
-        // Directly send the transcribed text to the chat
-        setInputValue(transcribedText);
-        // Optionally auto-send the message
-        // handleSendMessage(transcribedText);
+      const voiceAttachment = await stopRecordingAndCreateAttachment();
+      if (voiceAttachment) {
+        setAttachments(prev => [...prev, voiceAttachment]);
+        
+        // Auto-transcribe the voice attachment
+        try {
+          const transcription = await transcribeVoiceAttachment(voiceAttachment.url);
+          if (transcription) {
+            setAttachments(prev => prev.map(att => 
+              att.id === voiceAttachment.id 
+                ? { ...att, transcription, isTranscribed: true }
+                : att
+            ));
+          }
+        } catch (error) {
+          console.error('Auto-transcription failed:', error);
+        }
       }
     } else {
       await startRecording();
     }
-  }, [isRecording, startRecording, stopRecordingAndTranscribe]);
+  }, [isRecording, startRecording, stopRecordingAndCreateAttachment, transcribeVoiceAttachment]);
+
+  const handleTranscribeVoice = useCallback(async (attachmentId: string) => {
+    const attachment = attachments.find(att => att.id === attachmentId);
+    if (!attachment || attachment.type !== 'voice') return;
+    
+    const transcription = await transcribeVoiceAttachment(attachment.url);
+    if (transcription) {
+      setAttachments(prev => prev.map(att => 
+        att.id === attachmentId 
+          ? { ...att, transcription, isTranscribed: true }
+          : att
+      ));
+    }
+  }, [attachments, transcribeVoiceAttachment]);
 
   const handleMessageAction = useCallback(async (action: string, messageId: string) => {
     const message = messages.find(m => m.id === messageId);
@@ -1341,7 +1582,8 @@ const ChatApplication: React.FC<{}> = () => {
                   <ChatMessage
                     key={message.id} 
                     message={message} 
-                    onAction={handleMessageAction} 
+                    onAction={handleMessageAction}
+                    onTranscribeVoice={handlePostSendTranscription}
                   />
                 ))}
               </AnimatePresence>
@@ -1397,24 +1639,20 @@ const ChatApplication: React.FC<{}> = () => {
       
       <div className="border-t border-gray-200 bg-white px-6 py-4">
         <div className="max-w-4xl mx-auto">
-          <AnimatePresence>
-            {attachments.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="mb-4 space-y-2"
-              >
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-3">
+              <AnimatePresence>
                 {attachments.map(attachment => (
                   <AttachmentPreview
                     key={attachment.id}
                     attachment={attachment}
                     onRemove={() => removeAttachment(attachment.id)}
+                    onTranscribe={attachment.type === 'voice' ? handleTranscribeVoice : undefined}
                   />
                 ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
+              </AnimatePresence>
+            </div>
+          )}
           
           <AnimatePresence>
             {showLinkInput && (
@@ -1492,7 +1730,15 @@ const ChatApplication: React.FC<{}> = () => {
             
             <Button
               onClick={handleSendMessage}
-              disabled={isTyping || imageProcessing.isProcessing || (!inputValue.trim() && attachments.length === 0)}
+              disabled={
+                isTyping || 
+                imageProcessing.isProcessing || 
+                (
+                  !inputValue.trim() && 
+                  attachments.length === 0 && 
+                  !attachments.some(att => att.type === 'voice' && att.transcription)
+                )
+              }
               className="shadow-lg"
             >
               <Send className="w-4 h-4" />
