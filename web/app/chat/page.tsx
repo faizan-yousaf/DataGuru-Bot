@@ -755,13 +755,31 @@ const AttachmentPreview: React.FC<{
       exit={{ opacity: 0, scale: 0.9 }}
       className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-200"
     >
-      {getIcon()}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 truncate">{attachment.name}</p>
-        {attachment.size && (
-          <p className="text-xs text-gray-500">{formatFileSize(attachment.size)}</p>
-        )}
-      </div>
+      {attachment.type === 'image' ? (
+        <div className="flex items-center gap-3 w-full">
+          <img 
+            src={attachment.url} 
+            alt={attachment.name}
+            className="w-16 h-16 object-cover rounded-lg border"
+          />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-900 truncate">{attachment.name}</p>
+            {attachment.size && (
+              <p className="text-xs text-gray-500">{formatFileSize(attachment.size)}</p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
+          {getIcon()}
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-900 truncate">{attachment.name}</p>
+            {attachment.size && (
+              <p className="text-xs text-gray-500">{formatFileSize(attachment.size)}</p>
+            )}
+          </div>
+        </>
+      )}
       <Button variant="ghost" size="icon" onClick={onRemove} className="h-6 w-6">
         <X className="w-3 h-3" />
       </Button>
@@ -775,8 +793,17 @@ const AttachmentMenu: React.FC<{
   onClose: () => void;
 }> = ({ onFileSelect, onLinkAdd, onClose }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      onFileSelect(file);
+      onClose();
+    }
+  };
+
+  const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       onFileSelect(file);
@@ -787,8 +814,13 @@ const AttachmentMenu: React.FC<{
   const menuItems = [
     {
       icon: Upload,
-      label: 'Upload File',
+      label: 'Upload a document',
       action: () => fileInputRef.current?.click()
+    },
+    {
+      icon: ImageIcon,
+      label: 'Upload error screenshot',
+      action: () => imageInputRef.current?.click()
     },
     {
       icon: Link,
@@ -822,7 +854,15 @@ const AttachmentMenu: React.FC<{
         type="file"
         onChange={handleFileSelect}
         className="hidden"
-        accept="*/*"
+        accept=".pdf,.doc,.docx,.txt,.csv,.xlsx,.xls"
+      />
+      
+      <input
+        ref={imageInputRef}
+        type="file"
+        onChange={handleImageSelect}
+        className="hidden"
+        accept=".jpg,.jpeg,.png,.gif,.bmp,image/jpeg,image/png,image/gif,image/bmp"
       />
     </>
   );
@@ -1105,7 +1145,7 @@ const ChatApplication: React.FC<{}> = () => {
       const formData = new FormData();
       formData.append('image', file);
 
-      const response = await fetch('/api/extract-text', {
+      const response = await fetch('/api/ocr-extract', {
         method: 'POST',
         body: formData,
       });
@@ -1148,17 +1188,21 @@ const ChatApplication: React.FC<{}> = () => {
     
     if (imageAttachments.length > 0) {
       // Process the first image attachment for text extraction
-      const imageFile = await fetch(imageAttachments[0].url).then(r => r.blob());
-      const file = new File([imageFile], imageAttachments[0].name, { type: 'image/*' });
-      extractedText = await processImageForText(file);
-      
-      if (!extractedText && imageProcessing.error) {
-        // If image processing failed, show error and don't send message
-        return;
+      try {
+        const imageFile = await fetch(imageAttachments[0].url).then(r => r.blob());
+        const file = new File([imageFile], imageAttachments[0].name, { type: imageFile.type });
+        extractedText = await processImageForText(file);
+        
+        if (!extractedText && imageProcessing.error) {
+          // If image processing failed, show error but still allow sending
+          console.warn('Image processing failed:', imageProcessing.error);
+        }
+      } catch (error) {
+        console.error('Error processing image:', error);
       }
     }
 
-    const messageContent = inputValue.trim() || (extractedText ? 'Please analyze this image content' : 'Shared attachments');
+    const messageContent = inputValue.trim() || (extractedText ? `Please analyze this image content: ${extractedText}` : 'Shared attachments');
     await sendMessage(messageContent, attachments, extractedText || undefined);
     
     // Generate related prompts based on user query
@@ -1313,7 +1357,7 @@ const ChatApplication: React.FC<{}> = () => {
               {imageProcessing.isProcessing && (
                 <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center space-x-2">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-                  <span className="text-blue-700">Processing image with Idefics2 for code/error extraction...</span>
+                  <span className="text-blue-700">Processing image with OCR.Space for text extraction...</span>
                 </div>
               )}
 
