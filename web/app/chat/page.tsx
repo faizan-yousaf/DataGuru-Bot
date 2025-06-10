@@ -6,7 +6,7 @@ import {
   Send, Paperclip, Mic, MicOff, Link, Upload, X, Copy, 
   ThumbsUp, ThumbsDown, Share2, RefreshCw, Loader2, 
   Brain, Sparkles, Image as ImageIcon, FileText, ArrowRight,
-  Zap, Database, Bot, TrendingUp
+  Zap, Database, Bot, TrendingUp, Trash2, Edit
 } from 'lucide-react';
 import ReactMarkdown, { Components } from 'react-markdown';
 import { SYSTEM_PROMPT } from '@/data/prompt';
@@ -33,6 +33,7 @@ interface MessageAttachment {
   size?: number;
   transcription?: string;
   isTranscribed?: boolean;
+  showTranscription?: boolean;
 }
 
 interface MessageReactions {
@@ -333,7 +334,17 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
     const voiceAttachments = attachments.filter(att => att.type === 'voice' && att.transcription);
     if (voiceAttachments.length > 0) {
       const transcriptions = voiceAttachments.map(att => att.transcription).join(' ');
-      finalContent = transcriptions + (content ? ` ${content}` : '');
+      // Fix: Properly combine transcription with existing content
+      if (finalContent && finalContent.trim()) {
+        finalContent = `${transcriptions} ${finalContent}`;
+      } else {
+        finalContent = transcriptions;
+      }
+    }
+
+    // Ensure we have some content to send
+    if (!finalContent || !finalContent.trim()) {
+      finalContent = 'Hello';
     }
 
     const userMessage: ChatMessage = {
@@ -523,6 +534,23 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
     }));
   }, []);
 
+  const handleEditMessage = useCallback((messageId: string, newContent: string) => {
+    setState(prev => ({
+      ...prev,
+      messages: prev.messages.map(msg => 
+        msg.id === messageId ? { ...msg, content: newContent } : msg
+      )
+    }));
+  }, []);
+
+  const clearMessages = useCallback(() => {
+    setState({
+      messages: [],
+      isTyping: false,
+      error: null
+    });
+  }, []);
+
   return {
     messages: state.messages,
     isTyping: state.isTyping,
@@ -531,7 +559,8 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
     updateReaction,
     regenerateMessage,
     updateMessageAttachment,
-    isConfigured: !!apiKey
+    isConfigured: !!apiKey,
+    clearMessages
   };
 };
 
@@ -1028,9 +1057,24 @@ const AttachmentMenu: React.FC<{
 const ChatMessage: React.FC<{
   message: ChatMessage;
   onAction: (action: string, messageId: string) => void;
-  onTranscribeVoice?: (messageId: string, attachmentId: string) => void;
-}> = ({ message, onAction, onTranscribeVoice }) => {
+  onTranscribeVoice?: (messageId: string, attachmentId: string, action?: string) => void;
+  onEdit?: (messageId: string, newContent: string) => void;
+}> = ({ message, onAction, onTranscribeVoice, onEdit }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(message.content);
   const isUser = message.role === 'user';
+
+  const handleSaveEdit = () => {
+    if (onEdit && editContent.trim() !== message.content) {
+      onEdit(message.id, editContent.trim());
+    }
+    setIsEditing(false);
+  };
+
+  const handleCancelEdit = () => {
+    setEditContent(message.content);
+    setIsEditing(false);
+  };
   
   const components: Components = {
     code: ({ inline, className, children, ...props }: any) => {
@@ -1176,8 +1220,19 @@ const ChatMessage: React.FC<{
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'} group`}
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} group relative`}
     >
+      {/* Edit button for user messages */}
+      {isUser && !isEditing && (
+        <button
+          onClick={() => setIsEditing(true)}
+          className="absolute -left-8 top-4 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-gray-100"
+          title="Edit message"
+        >
+          <Edit className="w-4 h-4 text-gray-500" />
+        </button>
+      )}
+      
       <div className={`max-w-3xl px-6 py-4 rounded-2xl ${
         isUser 
           ? 'bg-blue-600 text-white ml-12' 
@@ -1187,7 +1242,21 @@ const ChatMessage: React.FC<{
           <div className="mb-3 space-y-2">
             {message.attachments.map(attachment => (
               <div key={attachment.id} className="flex items-center gap-2 text-sm opacity-80">
-                {attachment.type === 'image' && <ImageIcon className="w-4 h-4" />}
+                {attachment.type === 'image' && (
+                  <div className="flex items-center gap-2 w-full">
+                    <ImageIcon className="w-4 h-4" />
+                    <div className="flex-1">
+                      <span>{attachment.name}</span>
+                      <div className="mt-2">
+                        <img 
+                          src={attachment.url} 
+                          alt={attachment.name}
+                          className="max-w-xs max-h-48 rounded-lg border border-gray-300"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {attachment.type === 'link' && <Link className="w-4 h-4" />}
                 {attachment.type === 'document' && <FileText className="w-4 h-4" />}
                 {attachment.type === 'voice' && (
@@ -1195,15 +1264,28 @@ const ChatMessage: React.FC<{
                     <Mic className="w-4 h-4" />
                     <div className="flex-1">
                       <span>{attachment.name}</span>
-                      {attachment.transcription && (
+                      {attachment.showTranscription && attachment.transcription && (
                         <div className="text-xs mt-1 p-2 bg-black bg-opacity-20 rounded">
                           <strong>Transcription:</strong> {attachment.transcription}
                         </div>
                       )}
                     </div>
-                    {!attachment.isTranscribed && onTranscribeVoice && (
+                    {attachment.transcription && (
                       <button
-                        onClick={() => onTranscribeVoice(message.id, attachment.id)}
+                        onClick={() => {
+                          // Toggle transcription visibility
+                          if (onTranscribeVoice) {
+                            onTranscribeVoice(message.id, attachment.id, 'toggle');
+                          }
+                        }}
+                        className="px-2 py-1 text-xs bg-white bg-opacity-20 rounded hover:bg-opacity-30 transition-colors"
+                      >
+                        {attachment.showTranscription ? 'Hide' : 'Show'} Transcription
+                      </button>
+                    )}
+                    {!attachment.transcription && onTranscribeVoice && (
+                      <button
+                        onClick={() => onTranscribeVoice(message.id, attachment.id, 'transcribe')}
                         className="px-2 py-1 text-xs bg-white bg-opacity-20 rounded hover:bg-opacity-30 transition-colors"
                       >
                         Transcribe
@@ -1211,17 +1293,37 @@ const ChatMessage: React.FC<{
                     )}
                   </div>
                 )}
-                {attachment.type !== 'voice' && <span>{attachment.name}</span>}
+                {attachment.type !== 'voice' && attachment.type !== 'image' && <span>{attachment.name}</span>}
               </div>
             ))}
           </div>
         )}
         
-        <div className="prose prose-sm max-w-none">
-          <ReactMarkdown components={components}>
-            {message.content}
-          </ReactMarkdown>
-        </div>
+        {isEditing ? (
+          <div className="space-y-3">
+            <textarea
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              className="w-full p-2 border border-gray-300 rounded resize-none text-gray-900"
+              rows={3}
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleSaveEdit}>
+                Save
+              </Button>
+              <Button size="sm" variant="secondary" onClick={handleCancelEdit}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="prose prose-sm max-w-none">
+            <ReactMarkdown components={components}>
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        )}
         
         {!isUser && (
           <MessageActions message={message} onAction={onAction} />
@@ -1309,22 +1411,44 @@ const ChatApplication: React.FC<{}> = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const attachmentMenuRef = useClickOutside(() => setShowAttachmentMenu(false));
 
-  const { messages, isTyping, sendMessage, updateReaction, regenerateMessage, updateMessageAttachment, isConfigured } = useGeminiChat();
+  const { messages, isTyping, sendMessage, updateReaction, regenerateMessage, updateMessageAttachment, isConfigured, handleEditMessag, clearMessages } = useGeminiChat();
   const { isRecording, isTranscribing, startRecording, stopRecordingAndCreateAttachment, transcribeVoiceAttachment } = useAssemblyAIVoiceRecorder();
 
+  const handleDeleteChat = useCallback(() => {
+    if (window.confirm('Are you sure you want to delete this entire chat? This action cannot be undone.')) {
+      // Clear all messages and reset state
+      clearMessages();
+      setInputValue('');
+      setAttachments([]);
+      setRelatedPrompts([]);
+      setImageProcessing({ isProcessing: false, extractedText: null, error: null });
+    }
+  }, [clearMessages]);
+
   // Handle post-send voice transcription
-  const handlePostSendTranscription = useCallback(async (messageId: string, attachmentId: string) => {
+  const handlePostSendTranscription = useCallback(async (messageId: string, attachmentId: string, action: string = 'transcribe') => {
     const message = messages.find(m => m.id === messageId);
     const attachment = message?.attachments?.find(att => att.id === attachmentId);
     
     if (!attachment || attachment.type !== 'voice') return;
     
-    const transcription = await transcribeVoiceAttachment(attachment.url);
-    if (transcription) {
+    if (action === 'toggle') {
+      // Toggle transcription visibility
       updateMessageAttachment(messageId, attachmentId, {
-        transcription,
-        isTranscribed: true
+        showTranscription: !attachment.showTranscription
       });
+      return;
+    }
+    
+    if (action === 'transcribe' && !attachment.transcription) {
+      const transcription = await transcribeVoiceAttachment(attachment.url);
+      if (transcription) {
+        updateMessageAttachment(messageId, attachmentId, {
+          transcription,
+          isTranscribed: true,
+          showTranscription: true
+        });
+      }
     }
   }, [messages, transcribeVoiceAttachment, updateMessageAttachment]);
 
@@ -1378,7 +1502,7 @@ const ChatApplication: React.FC<{}> = () => {
     const voiceAttachments = attachments.filter(att => att.type === 'voice' && att.transcription);
     const hasVoiceContent = voiceAttachments.length > 0;
     
-    // Allow sending if we have text input OR voice content
+    // Allow sending if we have text input OR voice content OR other attachments
     if (!inputValue.trim() && !hasVoiceContent && attachments.length === 0) {
       return; // Nothing to send
     }
@@ -1412,13 +1536,17 @@ const ChatApplication: React.FC<{}> = () => {
       }
     }
 
-    // For error images, don't show extracted text to user, pass directly to AI
+    // For all images, don't show extracted text to user, pass directly to AI
     let messageContent: string;
-    if (isErrorImage && extractedText) {
-      messageContent = inputValue.trim() || 'Please debug this error from the uploaded screenshot.';
+    if (extractedText) {
+      // Don't include extracted text in user message content
+      messageContent = inputValue.trim() || 'Please analyze this image.';
       // The extracted text will be passed separately to the AI model
+    } else if (hasVoiceContent && !inputValue.trim()) {
+      // For voice-only messages, use a default message
+      messageContent = '';
     } else {
-      messageContent = inputValue.trim() || (extractedText ? `Please analyze this image content: ${extractedText}` : 'Shared attachments');
+      messageContent = inputValue.trim() || (attachments.length > 0 ? 'Shared attachments' : '');
     }
     
     await sendMessage(messageContent, attachments, extractedText || undefined, isErrorImage);
@@ -1486,19 +1614,14 @@ const ChatApplication: React.FC<{}> = () => {
       const voiceAttachment = await stopRecordingAndCreateAttachment();
       if (voiceAttachment) {
         setAttachments(prev => [...prev, voiceAttachment]);
-        
         // Auto-transcribe the voice attachment
-        try {
-          const transcription = await transcribeVoiceAttachment(voiceAttachment.url);
-          if (transcription) {
-            setAttachments(prev => prev.map(att => 
-              att.id === voiceAttachment.id 
-                ? { ...att, transcription, isTranscribed: true }
-                : att
-            ));
-          }
-        } catch (error) {
-          console.error('Auto-transcription failed:', error);
+        const transcription = await transcribeVoiceAttachment(voiceAttachment.url);
+        if (transcription) {
+          setAttachments(prev => prev.map(att => 
+            att.id === voiceAttachment.id 
+              ? { ...att, transcription, isTranscribed: true }
+              : att
+          ));
         }
       }
     } else {
@@ -1565,9 +1688,22 @@ const ChatApplication: React.FC<{}> = () => {
             <p className="text-sm text-gray-500">Your AI Data Science Assistant</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-yellow-500" />
-          <span className="text-sm font-medium text-gray-600">AI Powered</span>
+        <div className="flex items-center gap-4">
+          {messages.length > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleDeleteChat}
+              className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete Chat
+            </Button>
+          )}
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-yellow-500" />
+            <span className="text-sm font-medium text-gray-600">AI Powered</span>
+          </div>
         </div>
       </div>
       
@@ -1584,6 +1720,7 @@ const ChatApplication: React.FC<{}> = () => {
                     message={message} 
                     onAction={handleMessageAction}
                     onTranscribeVoice={handlePostSendTranscription}
+                    onEdit={handleEditMessage}
                   />
                 ))}
               </AnimatePresence>
@@ -1607,18 +1744,6 @@ const ChatApplication: React.FC<{}> = () => {
                 <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center space-x-2">
                   <X className="w-5 h-5 text-red-500" />
                   <span className="text-red-700">{imageProcessing.error}</span>
-                </div>
-              )}
-
-              {imageProcessing.extractedText && (
-                <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-                  <div className="flex items-center space-x-2 mb-2">
-                    <ImageIcon className="w-5 h-5 text-green-500" />
-                    <span className="font-medium text-green-700">Code/Error extracted from image:</span>
-                  </div>
-                  <pre className="text-sm text-gray-700 bg-white p-2 rounded border overflow-x-auto">
-                    {imageProcessing.extractedText}
-                  </pre>
                 </div>
               )}
               
