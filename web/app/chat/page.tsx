@@ -237,7 +237,13 @@ const useGeminiChat = () => {
     // If there's extracted text from an image, prepend it to the content
     let finalContent = content;
     if (extractedText) {
-      finalContent = `I uploaded an image with the following extracted text:\n\n${extractedText}\n\nPlease help me with: ${content || 'analyzing this content'}`;
+      finalContent = `I uploaded an image containing code/error content. Here's what was extracted:
+
+\`\`\`
+${extractedText}
+\`\`\`
+
+Please help me analyze this: ${content || 'Please analyze this code/error and provide solutions'}`;
     }
 
     const userMessage: ChatMessage = {
@@ -1107,25 +1113,26 @@ const ChatApplication: React.FC<{}> = () => {
       const data = await response.json();
 
       if (data.success) {
-        setImageProcessing(prev => ({ 
-          ...prev, 
-          isProcessing: false, 
-          extractedText: data.extractedText 
+        setImageProcessing(prev => ({
+          ...prev,
+          isProcessing: false,
+          extractedText: data.extractedText,
+          error: null
         }));
         return data.extractedText;
       } else {
-        setImageProcessing(prev => ({ 
-          ...prev, 
-          isProcessing: false, 
-          error: data.error || 'Failed to extract text from image' 
+        setImageProcessing(prev => ({
+          ...prev,
+          isProcessing: false,
+          error: data.error || 'Failed to extract text from image'
         }));
         return null;
       }
     } catch (error) {
-      setImageProcessing(prev => ({ 
-        ...prev, 
-        isProcessing: false, 
-        error: 'Network error occurred while processing image' 
+      setImageProcessing(prev => ({
+        ...prev,
+        isProcessing: false,
+        error: 'Network error occurred while processing image'
       }));
       return null;
     }
@@ -1304,41 +1311,29 @@ const ChatApplication: React.FC<{}> = () => {
               
               {/* Add image processing status */}
               {imageProcessing.isProcessing && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg border border-blue-200"
-                >
-                  <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
-                  <span className="text-blue-700">Processing image for text extraction...</span>
-                </motion.div>
+                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center space-x-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                  <span className="text-blue-700">Processing image with Idefics2 for code/error extraction...</span>
+                </div>
               )}
-              
+
               {imageProcessing.error && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="flex items-center gap-3 p-4 bg-red-50 rounded-lg border border-red-200"
-                >
+                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center space-x-2">
                   <X className="w-5 h-5 text-red-500" />
                   <span className="text-red-700">{imageProcessing.error}</span>
-                </motion.div>
+                </div>
               )}
-              
+
               {imageProcessing.extractedText && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="p-4 bg-green-50 rounded-lg border border-green-200"
-                >
-                  <div className="flex items-center gap-2 mb-2">
+                <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-2">
                     <ImageIcon className="w-5 h-5 text-green-500" />
-                    <span className="font-medium text-green-700">Text extracted from image:</span>
+                    <span className="font-medium text-green-700">Code/Error extracted from image:</span>
                   </div>
-                  <div className="text-sm text-green-600 bg-white p-3 rounded border font-mono">
+                  <pre className="text-sm text-gray-700 bg-white p-2 rounded border overflow-x-auto">
                     {imageProcessing.extractedText}
-                  </div>
-                </motion.div>
+                  </pre>
+                </div>
               )}
               
               {/* Show related prompts after the last assistant message */}

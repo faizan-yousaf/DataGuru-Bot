@@ -7,6 +7,7 @@ interface ExtractResult {
   debugResponse: string;
 }
 
+// Update the component title and description
 const ImageErrorExtractor: React.FC = () => {
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -66,6 +67,12 @@ const ImageErrorExtractor: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
+      <h1 className="text-3xl font-bold text-center mb-2 text-gray-800">
+        Code & Error Image Analyzer (Powered by Idefics2)
+      </h1>
+      <p className="text-center text-gray-600 mb-8">
+        Upload screenshots of code, error messages, or console output for AI-powered analysis and debugging
+      </p>
       <h2 className="text-2xl font-bold mb-6 text-gray-800">
         Image Error Extractor & Debugger
       </h2>
