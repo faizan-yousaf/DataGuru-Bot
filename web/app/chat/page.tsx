@@ -18,11 +18,12 @@ import { SYSTEM_PROMPT } from '@/data/prompt';
 
 interface ChatMessage {
   id: string;
-  content: string;
   role: 'user' | 'assistant';
+  content: string;
   timestamp: number;
   attachments?: MessageAttachment[];
   reactions?: MessageReactions;
+  isEdited?: boolean; // Add this line
 }
 
 interface MessageAttachment {
@@ -267,7 +268,9 @@ const generateContextualRelatedPrompts = (currentQuery: string, chatHistory: Cha
   return relatedPrompts.slice(0, 3);
 };
 
-const generateId = (): string => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+const generateId = () => {
+  return Date.now().toString() + Math.random().toString(36).substr(2, 9);
+};
 
 const formatFileSize = (bytes: number): string => {
   if (bytes === 0) return '0 Bytes';
@@ -534,14 +537,109 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
     }));
   }, []);
 
-  const handleEditMessage = useCallback((messageId: string, newContent: string) => {
-    setState(prev => ({
-      ...prev,
-      messages: prev.messages.map(msg => 
-        msg.id === messageId ? { ...msg, content: newContent } : msg
-      )
-    }));
-  }, []);
+  const handleEditMessage = useCallback(async (messageId: string, newContent: string) => {
+    // Find the message index
+    const messageIndex = state.messages.findIndex(msg => msg.id === messageId);
+    if (messageIndex === -1) return;
+    
+    const message = state.messages[messageIndex];
+    
+    // Only auto-regenerate for user messages
+    if (message.role === 'user') {
+      // Update the user message first
+      const updatedMessages = state.messages.map(msg => 
+        msg.id === messageId ? { ...msg, content: newContent, isEdited: true } : msg
+      );
+      
+      setState(prev => ({
+        ...prev,
+        messages: updatedMessages
+      }));
+      
+      // Find and remove the AI response that follows this user message
+      const nextMessageIndex = messageIndex + 1;
+      if (nextMessageIndex < updatedMessages.length && 
+          updatedMessages[nextMessageIndex].role === 'assistant') {
+        
+        // Remove the old AI response
+        const messagesWithoutOldResponse = updatedMessages.filter((_, index) => index !== nextMessageIndex);
+        
+        setState(prev => ({
+          ...prev,
+          messages: messagesWithoutOldResponse
+        }));
+        
+        // Generate new response based on edited message
+        try {
+          setState(prev => ({ ...prev, isTyping: true, error: null }));
+          
+          if (!model) {
+            setState(prev => ({ ...prev, error: 'API key not configured', isTyping: false }));
+            return;
+          }
+          
+          // Create conversation history with system prompt
+          const conversationHistory = [
+            { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
+            { role: 'model', parts: [{ text: 'Understood! I am DataGuru, your specialized Data Science AI assistant. I will validate the scope of all queries and respond only to data science, ML, AI, and related technical topics. I\'m ready to help with a friendly mentor approach unless you specify a different tone. What would you like to work on?' }] }
+          ];
+          
+          // Add messages up to the edited message (using the updated messages without the old response)
+          const messagesUpToEdit = messagesWithoutOldResponse.slice(0, messageIndex);
+          messagesUpToEdit.forEach(msg => {
+            conversationHistory.push({
+              role: msg.role === 'user' ? 'user' : 'model',
+              parts: [{ text: msg.content }]
+            });
+          });
+          
+          // Add the edited message
+          conversationHistory.push({
+            role: 'user',
+            parts: [{ text: newContent }]
+          });
+          
+          const chat = model.startChat({
+            history: conversationHistory.slice(0, -1), // All except the last message
+          });
+          
+          const result = await chat.sendMessage(newContent);
+          const response = await result.response;
+          const text = response.text();
+          
+          const assistantMessage: ChatMessage = {
+            id: generateId(),
+            content: text,
+            role: 'assistant',
+            timestamp: Date.now(),
+            reactions: { likes: 0, dislikes: 0, userLiked: false, userDisliked: false }
+          };
+          
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, assistantMessage],
+            isTyping: false
+          }));
+          
+        } catch (error) {
+          console.error('Error regenerating response:', error);
+          setState(prev => ({
+            ...prev,
+            isTyping: false,
+            error: 'Failed to regenerate response. Please try again.'
+          }));
+        }
+      }
+    } else {
+      // For assistant messages, just update the content
+      setState(prev => ({
+        ...prev,
+        messages: prev.messages.map(msg => 
+          msg.id === messageId ? { ...msg, content: newContent, isEdited: true } : msg
+        )
+      }));
+    }
+  }, [state.messages, model]);
 
   const clearMessages = useCallback(() => {
     setState({
@@ -560,7 +658,8 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
     regenerateMessage,
     updateMessageAttachment,
     isConfigured: !!apiKey,
-    clearMessages
+    clearMessages,
+    handleEditMessage
   };
 };
 
@@ -1059,14 +1158,18 @@ const ChatMessage: React.FC<{
   onAction: (action: string, messageId: string) => void;
   onTranscribeVoice?: (messageId: string, attachmentId: string, action?: string) => void;
   onEdit?: (messageId: string, newContent: string) => void;
-}> = ({ message, onAction, onTranscribeVoice, onEdit }) => {
+  isRegenerating?: boolean;
+}> = ({ message, onAction, onTranscribeVoice, onEdit, isRegenerating }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
+  const [isSaving, setIsSaving] = useState(false);
   const isUser = message.role === 'user';
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (onEdit && editContent.trim() !== message.content) {
-      onEdit(message.id, editContent.trim());
+      setIsSaving(true);
+      await onEdit(message.id, editContent.trim());
+      setIsSaving(false);
     }
     setIsEditing(false);
   };
@@ -1307,21 +1410,48 @@ const ChatMessage: React.FC<{
               className="w-full p-2 border border-gray-300 rounded resize-none text-gray-900"
               rows={3}
               autoFocus
+              disabled={isSaving}
             />
             <div className="flex gap-2">
-              <Button size="sm" onClick={handleSaveEdit}>
-                Save
+              <Button 
+                size="sm" 
+                onClick={handleSaveEdit}
+                disabled={isSaving || editContent.trim() === message.content}
+              >
+                {isSaving ? (
+                  <>
+                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+                    {isUser ? 'Updating...' : 'Saving...'}
+                  </>
+                ) : (
+                  'Save'
+                )}
               </Button>
-              <Button size="sm" variant="secondary" onClick={handleCancelEdit}>
+              <Button 
+                size="sm" 
+                variant="secondary" 
+                onClick={handleCancelEdit}
+                disabled={isSaving}
+              >
                 Cancel
               </Button>
             </div>
+            {isUser && (
+              <p className="text-xs text-gray-500">
+                💡 Saving will automatically update the AI's response
+              </p>
+            )}
           </div>
         ) : (
           <div className="prose prose-sm max-w-none">
             <ReactMarkdown components={components}>
               {message.content}
             </ReactMarkdown>
+            {message.isEdited && (
+              <div className="text-xs text-gray-500 mt-2 italic">
+                ✏️ Edited
+              </div>
+            )}
           </div>
         )}
         
@@ -1411,7 +1541,7 @@ const ChatApplication: React.FC<{}> = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const attachmentMenuRef = useClickOutside(() => setShowAttachmentMenu(false));
 
-  const { messages, isTyping, sendMessage, updateReaction, regenerateMessage, updateMessageAttachment, isConfigured, handleEditMessag, clearMessages } = useGeminiChat();
+  const { messages, isTyping, sendMessage, updateReaction, regenerateMessage, updateMessageAttachment, isConfigured, clearMessages, handleEditMessage } = useGeminiChat();
   const { isRecording, isTranscribing, startRecording, stopRecordingAndCreateAttachment, transcribeVoiceAttachment } = useAssemblyAIVoiceRecorder();
 
   const handleDeleteChat = useCallback(() => {
@@ -1721,6 +1851,7 @@ const ChatApplication: React.FC<{}> = () => {
                     onAction={handleMessageAction}
                     onTranscribeVoice={handlePostSendTranscription}
                     onEdit={handleEditMessage}
+                    isRegenerating={isTyping && message.role === 'user'}
                   />
                 ))}
               </AnimatePresence>
