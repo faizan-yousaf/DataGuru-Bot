@@ -35,6 +35,20 @@ interface MessageAttachment {
   transcription?: string;
   isTranscribed?: boolean;
   showTranscription?: boolean;
+  extractedText?: string;
+  isExtracted?: boolean;
+  linkAnalysis?: LinkAnalysisResult;
+  isAnalyzing?: boolean;
+  error?: string;
+}
+
+interface LinkAnalysisResult {
+  title: string;
+  description: string;
+  content: string;
+  url: string;
+  domain: string;
+  error?: string;
 }
 
 interface MessageReactions {
@@ -345,6 +359,32 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
       }
     }
 
+    // Check for link attachments and include analysis
+    const linkAttachments = attachments.filter(att => att.type === 'link' && att.linkAnalysis);
+    if (linkAttachments.length > 0) {
+      const linkAnalysisText = linkAttachments.map(att => {
+        const analysis = att.linkAnalysis!;
+        return `I shared a link: ${analysis.url}
+
+Title: ${analysis.title}
+Description: ${analysis.description}
+Domain: ${analysis.domain}
+
+Content Summary:
+${analysis.content.substring(0, 1500)}${analysis.content.length > 1500 ? '...' : ''}`;
+      }).join('\n\n');
+      
+      if (finalContent && finalContent.trim()) {
+        finalContent = `${linkAnalysisText}
+
+${finalContent}`;
+      } else {
+        finalContent = `${linkAnalysisText}
+
+Please analyze this link and provide insights about its content.`;
+      }
+    }
+
     // Ensure we have some content to send
     if (!finalContent || !finalContent.trim()) {
       finalContent = 'Hello';
@@ -537,109 +577,7 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
     }));
   }, []);
 
-  const handleEditMessage = useCallback(async (messageId: string, newContent: string) => {
-    // Find the message index
-    const messageIndex = state.messages.findIndex(msg => msg.id === messageId);
-    if (messageIndex === -1) return;
-    
-    const message = state.messages[messageIndex];
-    
-    // Only auto-regenerate for user messages
-    if (message.role === 'user') {
-      // Update the user message first
-      const updatedMessages = state.messages.map(msg => 
-        msg.id === messageId ? { ...msg, content: newContent, isEdited: true } : msg
-      );
-      
-      setState(prev => ({
-        ...prev,
-        messages: updatedMessages
-      }));
-      
-      // Find and remove the AI response that follows this user message
-      const nextMessageIndex = messageIndex + 1;
-      if (nextMessageIndex < updatedMessages.length && 
-          updatedMessages[nextMessageIndex].role === 'assistant') {
-        
-        // Remove the old AI response
-        const messagesWithoutOldResponse = updatedMessages.filter((_, index) => index !== nextMessageIndex);
-        
-        setState(prev => ({
-          ...prev,
-          messages: messagesWithoutOldResponse
-        }));
-        
-        // Generate new response based on edited message
-        try {
-          setState(prev => ({ ...prev, isTyping: true, error: null }));
-          
-          if (!model) {
-            setState(prev => ({ ...prev, error: 'API key not configured', isTyping: false }));
-            return;
-          }
-          
-          // Create conversation history with system prompt
-          const conversationHistory = [
-            { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
-            { role: 'model', parts: [{ text: 'Understood! I am DataGuru, your specialized Data Science AI assistant. I will validate the scope of all queries and respond only to data science, ML, AI, and related technical topics. I\'m ready to help with a friendly mentor approach unless you specify a different tone. What would you like to work on?' }] }
-          ];
-          
-          // Add messages up to the edited message (using the updated messages without the old response)
-          const messagesUpToEdit = messagesWithoutOldResponse.slice(0, messageIndex);
-          messagesUpToEdit.forEach(msg => {
-            conversationHistory.push({
-              role: msg.role === 'user' ? 'user' : 'model',
-              parts: [{ text: msg.content }]
-            });
-          });
-          
-          // Add the edited message
-          conversationHistory.push({
-            role: 'user',
-            parts: [{ text: newContent }]
-          });
-          
-          const chat = model.startChat({
-            history: conversationHistory.slice(0, -1), // All except the last message
-          });
-          
-          const result = await chat.sendMessage(newContent);
-          const response = await result.response;
-          const text = response.text();
-          
-          const assistantMessage: ChatMessage = {
-            id: generateId(),
-            content: text,
-            role: 'assistant',
-            timestamp: Date.now(),
-            reactions: { likes: 0, dislikes: 0, userLiked: false, userDisliked: false }
-          };
-          
-          setState(prev => ({
-            ...prev,
-            messages: [...prev.messages, assistantMessage],
-            isTyping: false
-          }));
-          
-        } catch (error) {
-          console.error('Error regenerating response:', error);
-          setState(prev => ({
-            ...prev,
-            isTyping: false,
-            error: 'Failed to regenerate response. Please try again.'
-          }));
-        }
-      }
-    } else {
-      // For assistant messages, just update the content
-      setState(prev => ({
-        ...prev,
-        messages: prev.messages.map(msg => 
-          msg.id === messageId ? { ...msg, content: newContent, isEdited: true } : msg
-        )
-      }));
-    }
-  }, [state.messages, model]);
+
 
   const clearMessages = useCallback(() => {
     setState({
@@ -658,8 +596,7 @@ Please help me analyze this: ${content || 'Please analyze this code/error and pr
     regenerateMessage,
     updateMessageAttachment,
     isConfigured: !!apiKey,
-    clearMessages,
-    handleEditMessage
+    clearMessages
   };
 };
 
@@ -1155,29 +1092,11 @@ const AttachmentMenu: React.FC<{
 
 const ChatMessage: React.FC<{
   message: ChatMessage;
-  onAction: (action: string, messageId: string) => void;
-  onTranscribeVoice?: (messageId: string, attachmentId: string, action?: string) => void;
-  onEdit?: (messageId: string, newContent: string) => void;
+  onAction?: (messageId: string, action: 'like' | 'dislike' | 'regenerate') => void;
+  onTranscribeVoice?: (messageId: string, attachmentId: string, action: 'transcribe' | 'toggle') => void;
   isRegenerating?: boolean;
-}> = ({ message, onAction, onTranscribeVoice, onEdit, isRegenerating }) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editContent, setEditContent] = useState(message.content);
-  const [isSaving, setIsSaving] = useState(false);
+}> = ({ message, onAction, onTranscribeVoice, isRegenerating }) => {
   const isUser = message.role === 'user';
-
-  const handleSaveEdit = async () => {
-    if (onEdit && editContent.trim() !== message.content) {
-      setIsSaving(true);
-      await onEdit(message.id, editContent.trim());
-      setIsSaving(false);
-    }
-    setIsEditing(false);
-  };
-
-  const handleCancelEdit = () => {
-    setEditContent(message.content);
-    setIsEditing(false);
-  };
   
   const components: Components = {
     code: ({ inline, className, children, ...props }: any) => {
@@ -1324,18 +1243,7 @@ const ChatMessage: React.FC<{
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
       className={`flex ${isUser ? 'justify-end' : 'justify-start'} group relative`}
-    >
-      {/* Edit button for user messages */}
-      {isUser && !isEditing && (
-        <button
-          onClick={() => setIsEditing(true)}
-          className="absolute -left-8 top-4 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-gray-100"
-          title="Edit message"
-        >
-          <Edit className="w-4 h-4 text-gray-500" />
-        </button>
-      )}
-      
+    >    
       <div className={`max-w-3xl px-6 py-4 rounded-2xl ${
         isUser 
           ? 'bg-blue-600 text-white ml-12' 
@@ -1360,7 +1268,26 @@ const ChatMessage: React.FC<{
                     </div>
                   </div>
                 )}
-                {attachment.type === 'link' && <Link className="w-4 h-4" />}
+                {attachment.type === 'link' && (
+                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Link className="w-4 h-4 text-purple-500" />
+                      <span className="text-sm font-medium text-purple-700">Link</span>
+                      {attachment.isAnalyzing && (
+                        <Loader2 className="w-4 h-4 animate-spin text-purple-500" />
+                      )}
+                    </div>
+                    <a 
+                      href={attachment.url} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-purple-600 hover:text-purple-800 text-sm break-all"
+                    >
+                      {attachment.name}
+                    </a>
+                    {/* Removed linkAnalysis details display - analysis is still sent to AI via sendMessage */}
+                  </div>
+                )}
                 {attachment.type === 'document' && <FileText className="w-4 h-4" />}
                 {attachment.type === 'voice' && (
                   <div className="flex items-center gap-2 w-full">
@@ -1396,64 +1323,22 @@ const ChatMessage: React.FC<{
                     )}
                   </div>
                 )}
-                {attachment.type !== 'voice' && attachment.type !== 'image' && <span>{attachment.name}</span>}
+                {attachment.type !== 'voice' && attachment.type !== 'image' && attachment.type !== 'link' && <span>{attachment.name}</span>}
               </div>
             ))}
           </div>
         )}
         
-        {isEditing ? (
-          <div className="space-y-3">
-            <textarea
-              value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
-              className="w-full p-2 border border-gray-300 rounded resize-none text-gray-900"
-              rows={3}
-              autoFocus
-              disabled={isSaving}
-            />
-            <div className="flex gap-2">
-              <Button 
-                size="sm" 
-                onClick={handleSaveEdit}
-                disabled={isSaving || editContent.trim() === message.content}
-              >
-                {isSaving ? (
-                  <>
-                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
-                    {isUser ? 'Updating...' : 'Saving...'}
-                  </>
-                ) : (
-                  'Save'
-                )}
-              </Button>
-              <Button 
-                size="sm" 
-                variant="secondary" 
-                onClick={handleCancelEdit}
-                disabled={isSaving}
-              >
-                Cancel
-              </Button>
+        <div className="prose prose-sm max-w-none">
+          <ReactMarkdown components={components}>
+            {message.content}
+          </ReactMarkdown>
+          {message.isEdited && (
+            <div className="text-xs text-gray-500 mt-2 italic">
+              ✏️ Edited
             </div>
-            {isUser && (
-              <p className="text-xs text-gray-500">
-                💡 Saving will automatically update the AI's response
-              </p>
-            )}
-          </div>
-        ) : (
-          <div className="prose prose-sm max-w-none">
-            <ReactMarkdown components={components}>
-              {message.content}
-            </ReactMarkdown>
-            {message.isEdited && (
-              <div className="text-xs text-gray-500 mt-2 italic">
-                ✏️ Edited
-              </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
         
         {!isUser && (
           <MessageActions message={message} onAction={onAction} />
@@ -1465,26 +1350,24 @@ const ChatMessage: React.FC<{
 
 const MessageActions: React.FC<{
   message: ChatMessage;
-  onAction: (action: string, messageId: string) => void;
+  onAction?: (messageId: string, action: 'like' | 'dislike' | 'regenerate') => void;
 }> = ({ message, onAction }) => {
   const actions = [
-    { icon: Copy, key: 'copy', label: 'Copy' },
     { 
       icon: ThumbsUp, 
-      key: 'like', 
+      key: 'like' as const, 
       label: 'Like',
       active: message.reactions?.userLiked,
       count: message.reactions?.likes
     },
     { 
       icon: ThumbsDown, 
-      key: 'dislike', 
+      key: 'dislike' as const, 
       label: 'Dislike',
       active: message.reactions?.userDisliked,
       count: message.reactions?.dislikes
     },
-    { icon: Share2, key: 'share', label: 'Share' },
-    { icon: RefreshCw, key: 'regenerate', label: 'Regenerate' }
+    { icon: RefreshCw, key: 'regenerate' as const, label: 'Regenerate' }
   ];
 
   return (
@@ -1494,7 +1377,7 @@ const MessageActions: React.FC<{
           key={key}
           variant="ghost"
           size="icon"
-          onClick={() => onAction(key, message.id)}
+          onClick={() => onAction?.(message.id, key)}
           className={`h-7 w-7 ${active ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
         >
           <div className="flex items-center gap-1">
@@ -1541,7 +1424,7 @@ const ChatApplication: React.FC<{}> = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const attachmentMenuRef = useClickOutside(() => setShowAttachmentMenu(false));
 
-  const { messages, isTyping, sendMessage, updateReaction, regenerateMessage, updateMessageAttachment, isConfigured, clearMessages, handleEditMessage } = useGeminiChat();
+  const { messages, isTyping, sendMessage, updateReaction, regenerateMessage, updateMessageAttachment, isConfigured, clearMessages } = useGeminiChat();
   const { isRecording, isTranscribing, startRecording, stopRecordingAndCreateAttachment, transcribeVoiceAttachment } = useAssemblyAIVoiceRecorder();
 
   const handleDeleteChat = useCallback(() => {
@@ -1666,19 +1549,17 @@ const ChatApplication: React.FC<{}> = () => {
       }
     }
 
-    // For all images, don't show extracted text to user, pass directly to AI
+    // Create user message content WITHOUT extracted text (this is what user sees)
     let messageContent: string;
-    if (extractedText) {
-      // Don't include extracted text in user message content
-      messageContent = inputValue.trim() || 'Please analyze this image.';
-      // The extracted text will be passed separately to the AI model
-    } else if (hasVoiceContent && !inputValue.trim()) {
+    if (hasVoiceContent && !inputValue.trim()) {
       // For voice-only messages, use a default message
       messageContent = '';
     } else {
+      // Use only the user's input text, not the extracted text
       messageContent = inputValue.trim() || (attachments.length > 0 ? 'Shared attachments' : '');
     }
     
+    // Send message with extracted text passed separately to AI (not shown to user)
     await sendMessage(messageContent, attachments, extractedText || undefined, isErrorImage);
     
     // Generate related prompts based on user query and conversation history
@@ -1724,20 +1605,75 @@ const ChatApplication: React.FC<{}> = () => {
     }
   }, []);
 
-  const handleLinkSubmit = useCallback(() => {
+  const analyzeLinkContent = useCallback(async (url: string): Promise<LinkAnalysisResult | null> => {
+    try {
+      const response = await fetch('/api/link-analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to analyze link: ${response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Link analysis error:', error);
+      return null;
+    }
+  }, []);
+
+  const handleLinkSubmit = useCallback(async () => {
     if (!linkInput.trim() || !isValidUrl(linkInput)) return;
 
     const linkAttachment: MessageAttachment = {
       id: generateId(),
       type: 'link',
       url: linkInput,
-      name: linkInput
+      name: linkInput,
+      isAnalyzing: true
     };
     
     setAttachments(prev => [...prev, linkAttachment]);
     setLinkInput('');
     setShowLinkInput(false);
-  }, [linkInput]);
+
+    try {
+      // Analyze the link in the background
+      const analysis = await analyzeLinkContent(linkInput);
+      
+      // Update the attachment with analysis results
+      setAttachments(prev => 
+        prev.map(att => 
+          att.id === linkAttachment.id 
+            ? { 
+                ...att, 
+                linkAnalysis: analysis || undefined, 
+                isAnalyzing: false,
+                error: analysis ? undefined : 'Failed to analyze link'
+              }
+            : att
+        )
+      );
+    } catch (error) {
+      // Handle any errors that occur during analysis
+      setAttachments(prev => 
+        prev.map(att => 
+          att.id === linkAttachment.id 
+            ? { 
+                ...att, 
+                isAnalyzing: false,
+                error: 'Failed to analyze link'
+              }
+            : att
+        )
+      );
+      console.error('Link analysis error:', error);
+    }
+  }, [linkInput, analyzeLinkContent]);
 
   const handleVoiceToggle = useCallback(async () => {
     if (isRecording) {
@@ -1773,26 +1709,16 @@ const ChatApplication: React.FC<{}> = () => {
     }
   }, [attachments, transcribeVoiceAttachment]);
 
-  const handleMessageAction = useCallback(async (action: string, messageId: string) => {
+  const handleMessageAction = useCallback(async (messageId: string, action: 'like' | 'dislike' | 'regenerate') => {
     const message = messages.find(m => m.id === messageId);
     if (!message) return;
 
     switch (action) {
-      case 'copy':
-        await navigator.clipboard.writeText(message.content);
-        break;
       case 'like':
         updateReaction(messageId, 'like');
         break;
       case 'dislike':
         updateReaction(messageId, 'dislike');
-        break;
-      case 'share':
-        if (navigator.share) {
-          await navigator.share({ title: 'AI Chat', text: message.content });
-        } else {
-          await navigator.clipboard.writeText(message.content);
-        }
         break;
       case 'regenerate':
         await regenerateMessage(messageId);
@@ -1850,7 +1776,6 @@ const ChatApplication: React.FC<{}> = () => {
                     message={message} 
                     onAction={handleMessageAction}
                     onTranscribeVoice={handlePostSendTranscription}
-                    onEdit={handleEditMessage}
                     isRegenerating={isTyping && message.role === 'user'}
                   />
                 ))}
@@ -1958,7 +1883,7 @@ const ChatApplication: React.FC<{}> = () => {
               </AnimatePresence>
             </div>
             
-            <div className="flex-1">
+            <div className="flex-1 relative">
               <Input
                 value={inputValue}
                 onChange={setInputValue}
@@ -1966,6 +1891,7 @@ const ChatApplication: React.FC<{}> = () => {
                 onKeyDown={handleKeyDown}
                 disabled={isTyping}
               />
+
             </div>
             
             <Button
