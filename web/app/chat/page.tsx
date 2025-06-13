@@ -12,6 +12,7 @@ import {
 import ReactMarkdown, { Components } from 'react-markdown';
 import { SYSTEM_PROMPT } from '@/data/prompt';
 import Image from 'next/image';
+import logo from "@/public/chatbot-logo.png"
 
 
 // =============================================================================
@@ -739,8 +740,7 @@ const WelcomeScreen: React.FC<{
       >
         <div className="flex items-center justify-center mb-6">
           <div className="relative">
-            <Brain className="w-16 h-16 text-blue-500" />
-            <Sparkles className="w-6 h-6 text-yellow-500 absolute -top-1 -right-1 animate-pulse" />
+            <Image src={logo} height={100} width={100} alt="DataGuru Logo"/>
           </div>
         </div>
         <h1 className="text-4xl font-bold text-gray-900 mb-4">
@@ -1733,7 +1733,7 @@ const ChatApplication: React.FC<{}> = () => {
     <div className="flex flex-col h-screen bg-gradient-to-br from-gray-50 to-blue-50">
       <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white">
         <div className="flex items-center gap-3">
-          <Brain className="w-6 h-6 text-blue-500" />
+        <Image src={logo} height={32} width={32} alt="DataGuru Logo"/>
           <div>
             <h1 className="text-lg font-semibold text-gray-900">DataGuru Chat</h1>
             <p className="text-sm text-gray-500">Your AI Data Science Assistant</p>
